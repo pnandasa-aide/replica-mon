@@ -13,21 +13,27 @@
 #
 # Usage:
 #   chmod +x demo_workflow.sh
-#   ./demo_workflow.sh [single|multi]
+#   ./demo_workflow.sh [single|multi] [--dry-run]
 #
 # Modes:
-#   single  - Demo with single table (default)
-#   multi   - Demo with multiple tables
+#   single     - Demo with single table (default)
+#   multi      - Demo with multiple tables
+#   --dry-run  - Show commands without executing (safe testing)
+#
+# Examples:
+#   ./demo_workflow.sh single           # Run single table demo
+#   ./demo_workflow.sh multi            # Run multi-table demo
+#   ./demo_workflow.sh single --dry-run # Preview commands without execution
 ###############################################################################
 
 set -e  # Exit on error
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QADMCLI_DIR="$SCRIPT_DIR/qadmcli"
-GLUESYNC_DIR="$SCRIPT_DIR/gluesync-cli"
-REPLICA_DIR="$SCRIPT_DIR/replica-mon"
-ENV_FILE="$SCRIPT_DIR/.env"
+QADMCLI_DIR="$SCRIPT_DIR/../qadmcli"
+GLUESYNC_DIR="$SCRIPT_DIR/../gluesync-cli"
+REPLICA_DIR="$SCRIPT_DIR"
+ENV_FILE="$SCRIPT_DIR/../.env"
 
 # Colors for output
 RED='\033[0;31m'
@@ -68,6 +74,50 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
+# Validate required directories and files
+VALIDATION_ERRORS=0
+
+log_info "Validating environment..."
+
+# Check qadmcli
+if [ ! -d "$QADMCLI_DIR" ]; then
+    log_error "qadmcli directory not found: $QADMCLI_DIR"
+    VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+elif [ ! -f "$QADMCLI_DIR/qadmcli.sh" ]; then
+    log_error "qadmcli.sh not found in $QADMCLI_DIR"
+    VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+else
+    log_success "qadmcli found: $QADMCLI_DIR/qadmcli.sh"
+fi
+
+# Check gluesync-cli
+if [ ! -d "$GLUESYNC_DIR" ]; then
+    log_error "gluesync-cli directory not found: $GLUESYNC_DIR"
+    VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+elif [ ! -f "$GLUESYNC_DIR/gluesync_cli_v2.py" ]; then
+    log_error "gluesync_cli_v2.py not found in $GLUESYNC_DIR"
+    VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+else
+    log_success "gluesync-cli found: $GLUESYNC_DIR/gluesync_cli_v2.py"
+fi
+
+# Check replica-mon
+if [ "$DRY_RUN" = false ]; then
+    if [ ! -f "$REPLICA_DIR/compare.py" ]; then
+        log_error "compare.py not found in $REPLICA_DIR"
+        VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+    else
+        log_success "replica-mon compare.py found: $REPLICA_DIR/compare.py"
+    fi
+fi
+
+if [ $VALIDATION_ERRORS -gt 0 ]; then
+    log_error "Validation failed with $VALIDATION_ERRORS error(s)"
+    exit 1
+fi
+
+log_success "Environment validation passed"
+
 # Source environment
 source "$ENV_FILE"
 export AS400_USER AS400_PASSWORD MSSQL_USER MSSQL_PASSWORD MSSQL_ADMIN_USER MSSQL_ADMIN_PASSWORD
@@ -75,9 +125,60 @@ export GLUESYNC_ADMIN_USERNAME GLUESYNC_ADMIN_PASSWORD
 
 log_info "Environment loaded from $ENV_FILE"
 
-# Determine mode
-MODE=${1:-single}
+# Parse arguments
+MODE="single"
+DRY_RUN=false
+
+for arg in "$@"; do
+    case $arg in
+        single|multi)
+            MODE="$arg"
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        *)
+            log_error "Unknown argument: $arg"
+            log_error "Usage: $0 [single|multi] [--dry-run]"
+            exit 1
+            ;;
+    esac
+done
+
 log_info "Running in mode: $MODE"
+if [ "$DRY_RUN" = true ]; then
+    log_warn "DRY-RUN MODE: Commands will be shown but NOT executed"
+fi
+
+# Helper function to execute or preview commands
+run_cmd() {
+    local cmd="$1"
+    local description="$2"
+    
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY-RUN] Would execute: $description"
+        echo "  Command: $cmd"
+        echo ""
+    else
+        log_info "Executing: $description"
+        eval "$cmd"
+    fi
+}
+
+# Helper function for commands with expected failures
+run_cmd_allow_fail() {
+    local cmd="$1"
+    local description="$2"
+    
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY-RUN] Would execute: $description"
+        echo "  Command: $cmd"
+        echo ""
+    else
+        log_info "Executing: $description"
+        eval "$cmd" || log_warn "Command failed (may be expected): $description"
+    fi
+}
 
 ###############################################################################
 # PHASE 1: CREATE SOURCE TABLE ON AS400
@@ -101,21 +202,14 @@ for TABLE in "${TABLES[@]}"; do
     cd "$QADMCLI_DIR"
     
     # Create table on AS400
-    ./qadmcli.sh as400 execute \
-        -q "CREATE TABLE $LIBRARY.$TABLE (
-            CUST_ID BIGINT NOT NULL PRIMARY KEY,
-            FIRST_NAME VARCHAR(50),
-            LAST_NAME VARCHAR(50),
-            EMAIL VARCHAR(100),
-            PHONE VARCHAR(20),
-            CREATED_DATE TIMESTAMP,
-            STATUS VARCHAR(20)
-        )" 2>&1 | tail -5 || log_warn "Table may already exist, continuing..."
+    run_cmd_allow_fail \
+        "./qadmcli.sh as400 execute -q \"CREATE TABLE $LIBRARY.$TABLE (CUST_ID BIGINT NOT NULL PRIMARY KEY, FIRST_NAME VARCHAR(50), LAST_NAME VARCHAR(50), EMAIL VARCHAR(100), PHONE VARCHAR(20), CREATED_DATE TIMESTAMP, STATUS VARCHAR(20))\" 2>&1 | tail -5" \
+        "Create AS400 table $LIBRARY.$TABLE"
     
     # Enable journaling on table
-    log_info "Enabling journaling on $LIBRARY.$TABLE..."
-    ./qadmcli.sh journal enable -n "$TABLE" -l "$LIBRARY" 2>&1 | tail -3 || \
-        log_warn "Journaling may already be enabled"
+    run_cmd_allow_fail \
+        "./qadmcli.sh journal enable -n \"$TABLE\" -l \"$LIBRARY\" 2>&1 | tail -3" \
+        "Enable journaling on $LIBRARY.$TABLE"
     
     log_success "Table $LIBRARY.$TABLE created with journaling"
 done
@@ -134,35 +228,26 @@ for TABLE in "${TABLES[@]}"; do
     cd "$QADMCLI_DIR"
     
     # Create table on MSSQL
-    ./qadmcli.sh mssql execute \
-        -q "IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='$TABLE' and xtype='U')
-        CREATE TABLE $SCHEMA.$TABLE (
-            CUST_ID BIGINT PRIMARY KEY,
-            FIRST_NAME NVARCHAR(50),
-            LAST_NAME NVARCHAR(50),
-            EMAIL NVARCHAR(100),
-            PHONE NVARCHAR(20),
-            CREATED_DATE DATETIME2,
-            STATUS NVARCHAR(20)
-        )" 2>&1 | tail -3 || log_warn "Table may already exist"
+    run_cmd_allow_fail \
+        "./qadmcli.sh mssql execute -q \"IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='$TABLE' and xtype='U') CREATE TABLE $SCHEMA.$TABLE (CUST_ID BIGINT PRIMARY KEY, FIRST_NAME NVARCHAR(50), LAST_NAME NVARCHAR(50), EMAIL NVARCHAR(100), PHONE NVARCHAR(20), CREATED_DATE DATETIME2, STATUS NVARCHAR(20))\" 2>&1 | tail -3" \
+        "Create MSSQL table $SCHEMA.$TABLE"
     
     # Enable Change Tracking on database (if not already enabled)
     if [ "$TABLE" = "${TABLES[0]}" ]; then
-        log_info "Enabling CT on database $DATABASE..."
-        ./qadmcli.sh mssql ct enable-db \
-            --admin-user "$MSSQL_ADMIN_USER" \
-            --admin-password "$MSSQL_ADMIN_PASSWORD" \
-            --retention 2 2>&1 | tail -5 || log_warn "CT may already be enabled on database"
+        run_cmd_allow_fail \
+            "./qadmcli.sh mssql ct enable-db --admin-user \"$MSSQL_ADMIN_USER\" --admin-password \"$MSSQL_ADMIN_PASSWORD\" --retention 2 2>&1 | tail -5" \
+            "Enable CT on database $DATABASE"
     fi
     
     # Enable CT on table
-    log_info "Enabling CT on table $SCHEMA.$TABLE..."
-    ./qadmcli.sh mssql ct enable-table -t "$TABLE" -s "$SCHEMA" 2>&1 | tail -3 || \
-        log_warn "CT may already be enabled on table"
+    run_cmd_allow_fail \
+        "./qadmcli.sh mssql ct enable-table -t \"$TABLE\" -s \"$SCHEMA\" 2>&1 | tail -3" \
+        "Enable CT on table $SCHEMA.$TABLE"
     
     # Verify CT status
-    log_info "Verifying CT status for $SCHEMA.$TABLE..."
-    ./qadmcli.sh mssql ct status -t "$TABLE" -s "$SCHEMA" 2>&1 | grep -E "CT Enabled|Error" | head -2
+    run_cmd \
+        "./qadmcli.sh mssql ct status -t \"$TABLE\" -s \"$SCHEMA\" 2>&1 | grep -E \"CT Enabled|Error\" | head -2" \
+        "Verify CT status for $SCHEMA.$TABLE"
     
     log_success "Table $SCHEMA.$TABLE created with CT enabled"
 done
