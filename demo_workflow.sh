@@ -203,7 +203,7 @@ for TABLE in "${TABLES[@]}"; do
     
     # Create table on AS400
     run_cmd_allow_fail \
-        "./qadmcli.sh as400 execute -q \"CREATE TABLE $LIBRARY.$TABLE (CUST_ID BIGINT NOT NULL PRIMARY KEY, FIRST_NAME VARCHAR(50), LAST_NAME VARCHAR(50), EMAIL VARCHAR(100), PHONE VARCHAR(20), CREATED_DATE TIMESTAMP, STATUS VARCHAR(20))\" 2>&1 | tail -5" \
+        "./qadmcli.sh sql execute --database as400 -q \"CREATE TABLE $LIBRARY.$TABLE (CUST_ID BIGINT NOT NULL PRIMARY KEY, FIRST_NAME VARCHAR(50), LAST_NAME VARCHAR(50), EMAIL VARCHAR(100), PHONE VARCHAR(20), CREATED_DATE TIMESTAMP, STATUS VARCHAR(20))\" 2>&1 | tail -5" \
         "Create AS400 table $LIBRARY.$TABLE"
     
     # Enable journaling on table
@@ -229,7 +229,7 @@ for TABLE in "${TABLES[@]}"; do
     
     # Create table on MSSQL
     run_cmd_allow_fail \
-        "./qadmcli.sh mssql execute -q \"IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='$TABLE' and xtype='U') CREATE TABLE $SCHEMA.$TABLE (CUST_ID BIGINT PRIMARY KEY, FIRST_NAME NVARCHAR(50), LAST_NAME NVARCHAR(50), EMAIL NVARCHAR(100), PHONE NVARCHAR(20), CREATED_DATE DATETIME2, STATUS NVARCHAR(20))\" 2>&1 | tail -3" \
+        "./qadmcli.sh sql execute --database mssql -q \"IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='$TABLE' and xtype='U') CREATE TABLE $SCHEMA.$TABLE (CUST_ID BIGINT PRIMARY KEY, FIRST_NAME NVARCHAR(50), LAST_NAME NVARCHAR(50), EMAIL NVARCHAR(100), PHONE NVARCHAR(20), CREATED_DATE DATETIME2, STATUS NVARCHAR(20))\" 2>&1 | tail -3" \
         "Create MSSQL table $SCHEMA.$TABLE"
     
     # Enable Change Tracking on database (if not already enabled)
