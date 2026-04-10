@@ -343,7 +343,7 @@ PIPELINE_ID=""
 
 cd "$GLUESYNC_DIR"
 
-# Check if pipeline already exists
+# Step 1: Check if pipeline already exists
 log_info "Checking for existing pipeline..."
 EXISTING_PIPELINE=$(python3 gluesync_cli_v2.py list pipelines 2>&1 | grep -i "demo" | head -1)
 
@@ -372,7 +372,7 @@ else
     if [ $PIPELINE_EXIT_CODE -ne 0 ]; then
         log_error "Failed to create pipeline (exit code: $PIPELINE_EXIT_CODE)"
         echo "$PIPELINE_OUTPUT" | tail -20
-        log_error "Skipping to next phase..."
+        log_error "Cannot continue with replication phases"
         PIPELINE_ID=""
     else
         # Extract pipeline ID
@@ -381,45 +381,50 @@ else
         if [ -z "$PIPELINE_ID" ]; then
             log_error "Failed to extract pipeline ID from output"
             echo "$PIPELINE_OUTPUT" | tail -10
-            log_error "Skipping to next phase..."
+            log_error "Cannot continue with replication phases"
         else
             log_success "Pipeline created with ID: $PIPELINE_ID"
         fi
     fi
 fi
 
-# If no pipeline ID, we can't continue with entities
-if [ -z "$PIPELINE_ID" ]; then
-    log_error "No pipeline available, skipping entity creation and replication phases"
-    log_warn "You can manually create pipeline and entities via GlueSync UI"
-    log_info "Continuing with mockup data generation for testing purposes..."
-    # Don't exit, continue with demo
-fi
-
-# Add entities to pipeline
+# Step 2: Check/add entities for each table
 if [ -n "$PIPELINE_ID" ]; then
     for TABLE in "${TABLES[@]}"; do
-        log_info "Adding entity: $LIBRARY.$TABLE -> $SCHEMA.$TABLE..."
+        log_info "Checking entity for $LIBRARY.$TABLE -> $SCHEMA.$TABLE..."
         
-        ENTITY_OUTPUT=$(python3 gluesync_cli_v2.py create entity \
-            --pipeline "$PIPELINE_ID" \
-            --source-library "$LIBRARY" \
-            --source-table "$TABLE" \
-            --target-schema "$SCHEMA" \
-            --target-table "$TABLE" \
-            --polling-interval 500 \
-            --batch-size 1000 2>&1)
+        # Check if entity already exists for this table mapping
+        EXISTING_ENTITY=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
+                         grep "$TABLE" | grep "$LIBRARY" | head -1)
         
-        ENTITY_ID=$(echo "$ENTITY_OUTPUT" | grep -oP '(?<=Entity ID: )\w+' | head -1)
-        
-        if [ -z "$ENTITY_ID" ]; then
-            log_warn "Entity may already exist for $TABLE"
+        if [ -n "$EXISTING_ENTITY" ]; then
+            ENTITY_ID=$(echo "$EXISTING_ENTITY" | awk '{print $1}')
+            log_warn "Entity already exists for $TABLE (ID: $ENTITY_ID), skipping creation"
         else
-            log_success "Entity created with ID: $ENTITY_ID"
+            log_info "Adding new entity: $LIBRARY.$TABLE -> $SCHEMA.$TABLE..."
+            
+            ENTITY_OUTPUT=$(python3 gluesync_cli_v2.py create entity \
+                --pipeline "$PIPELINE_ID" \
+                --source-library "$LIBRARY" \
+                --source-table "$TABLE" \
+                --target-schema "$SCHEMA" \
+                --target-table "$TABLE" \
+                --polling-interval 500 \
+                --batch-size 1000 2>&1)
+            
+            ENTITY_ID=$(echo "$ENTITY_OUTPUT" | grep -oP '(?<=Entity ID: )\w+' | head -1)
+            
+            if [ -z "$ENTITY_ID" ]; then
+                log_error "Failed to create entity for $TABLE"
+                echo "$ENTITY_OUTPUT" | tail -10
+            else
+                log_success "Entity created with ID: $ENTITY_ID"
+            fi
         fi
     done
 else
-    log_warn "Skipping entity creation (no pipeline available)"
+    log_error "No pipeline available, cannot add entities"
+    log_warn "Please create pipeline manually via GlueSync UI"
 fi
 
 ###############################################################################
@@ -431,7 +436,7 @@ if [ -n "$PIPELINE_ID" ]; then
     cd "$GLUESYNC_DIR"
     
     for TABLE in "${TABLES[@]}"; do
-        log_info "Starting entity for $TABLE (Snapshot + CDC mode)..."
+        log_info "Checking entity status for $TABLE..."
         
         # Get entity ID
         ENTITY_ID=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
@@ -442,12 +447,22 @@ if [ -n "$PIPELINE_ID" ]; then
             continue
         fi
         
-        # Start entity with snapshot mode (initial load + CDC)
-        python3 gluesync_cli_v2.py start entity "$ENTITY_ID" \
-            --pipeline "$PIPELINE_ID" \
-            --mode snapshot 2>&1 | tail -5
+        # Check if entity is already running
+        ENTITY_STATUS=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
+                       grep "$TABLE" | awk '{print $3}' | head -1)
         
-        log_success "Entity $TABLE started in snapshot mode"
+        if [ "$ENTITY_STATUS" = "RUNNING" ] || [ "$ENTITY_STATUS" = "ACTIVE" ]; then
+            log_warn "Entity for $TABLE is already running (Status: $ENTITY_STATUS)"
+        else
+            log_info "Starting entity for $TABLE (Snapshot + CDC mode)..."
+            
+            # Start entity with snapshot mode (initial load + CDC)
+            python3 gluesync_cli_v2.py start entity "$ENTITY_ID" \
+                --pipeline "$PIPELINE_ID" \
+                --mode snapshot 2>&1 | tail -5
+            
+            log_success "Entity $TABLE started in snapshot mode"
+        fi
         
         # Wait a moment for snapshot to begin
         sleep 2
@@ -456,8 +471,8 @@ if [ -n "$PIPELINE_ID" ]; then
     log_info "Waiting 10 seconds for initial snapshot to complete..."
     sleep 10
 else
-    log_warn "Skipping replication start (no pipeline available)"
-    log_info "You can manually start replication via GlueSync UI"
+    log_error "No pipeline available, cannot start replication"
+    log_warn "Please create pipeline and entities manually via GlueSync UI"
 fi
 
 ###############################################################################
