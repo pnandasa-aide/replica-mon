@@ -279,7 +279,7 @@ for TABLE in "${TABLES[@]}"; do
     cd "$QADMCLI_DIR"
     
     # Check if table exists
-    TABLE_EXISTS=$(./qadmcli.sh sql execute -t mssql -q "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$SCHEMA' AND TABLE_NAME='$TABLE'" 2>&1 | grep -oP '^\d+' | head -1)
+    TABLE_EXISTS=$(./qadmcli.sh mssql query -q "SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$SCHEMA' AND TABLE_NAME='$TABLE'" --format json 2>&1 | python3 -c "import sys, json; data=json.load(sys.stdin); print(data[0]['cnt'])" 2>/dev/null || echo "0")
     
     if [ "$TABLE_EXISTS" = "1" ]; then
         log_warn "Table $SCHEMA.$TABLE already exists, skipping creation"
@@ -288,7 +288,7 @@ for TABLE in "${TABLES[@]}"; do
         
         # Create table on MSSQL
         run_cmd_allow_fail \
-            "./qadmcli.sh sql execute -t mssql -q \"CREATE TABLE $SCHEMA.$TABLE (CUST_ID BIGINT PRIMARY KEY, FIRST_NAME NVARCHAR(50), LAST_NAME NVARCHAR(50), EMAIL NVARCHAR(100), PHONE NVARCHAR(20), CREATED_DATE DATETIME2, STATUS NVARCHAR(20))\" 2>&1 | tail -3" \
+            "./qadmcli.sh mssql execute -q \"CREATE TABLE $SCHEMA.$TABLE (CUST_ID BIGINT PRIMARY KEY, FIRST_NAME NVARCHAR(50), LAST_NAME NVARCHAR(50), EMAIL NVARCHAR(100), PHONE NVARCHAR(20), CREATED_DATE DATETIME2, STATUS NVARCHAR(20))\" 2>&1 | tail -3" \
             "Create MSSQL table $SCHEMA.$TABLE"
     fi
     
