@@ -257,10 +257,17 @@ for TABLE in "${TABLES[@]}"; do
             "Create AS400 table $LIBRARY.$TABLE"
     fi
     
-    # Enable journaling on table
-    run_cmd_allow_fail \
-        "./qadmcli.sh journal enable -n \"$TABLE\" -l \"$LIBRARY\" 2>&1 | tail -3" \
-        "Enable journaling on $LIBRARY.$TABLE"
+    # Check if journaling is already enabled
+    JOURNAL_STATUS=$(./qadmcli.sh journal info -n "$TABLE" -l "$LIBRARY" 2>&1 | grep "Journaled:" | awk '{print $2}')
+    
+    if [ "$JOURNAL_STATUS" = "Yes" ]; then
+        log_warn "Journaling already enabled on $LIBRARY.$TABLE"
+    else
+        # Enable journaling on table
+        run_cmd_allow_fail \
+            "./qadmcli.sh journal enable -n \"$TABLE\" -l \"$LIBRARY\" 2>&1 | tail -3" \
+            "Enable journaling on $LIBRARY.$TABLE"
+    fi
     
     log_success "Table $LIBRARY.$TABLE ready with journaling"
 done
@@ -294,15 +301,29 @@ for TABLE in "${TABLES[@]}"; do
     
     # Enable Change Tracking on database (if not already enabled)
     if [ "$TABLE" = "${TABLES[0]}" ]; then
-        run_cmd_allow_fail \
-            "./qadmcli.sh mssql ct enable-db --admin-user \"$MSSQL_ADMIN_USER\" --admin-password \"$MSSQL_ADMIN_PASSWORD\" --retention 2 2>&1 | tail -5" \
-            "Enable CT on database $DATABASE"
+        # Check if CT is enabled on database
+        CT_DB_STATUS=$(./qadmcli.sh mssql ct status 2>&1 | grep "CT Enabled on Database:" | awk '{print $NF}')
+        
+        if [ "$CT_DB_STATUS" = "Yes" ]; then
+            log_warn "Change Tracking already enabled on database $DATABASE"
+        else
+            run_cmd_allow_fail \
+                "./qadmcli.sh mssql ct enable-db --admin-user \"$MSSQL_ADMIN_USER\" --admin-password \"$MSSQL_ADMIN_PASSWORD\" --retention 2 2>&1 | tail -5" \
+                "Enable CT on database $DATABASE"
+        fi
     fi
     
-    # Enable CT on table
-    run_cmd_allow_fail \
-        "./qadmcli.sh mssql ct enable-table -t \"$TABLE\" -s \"$SCHEMA\" 2>&1 | tail -3" \
-        "Enable CT on table $SCHEMA.$TABLE"
+    # Check if CT is enabled on table
+    CT_TABLE_STATUS=$(./qadmcli.sh mssql ct status -t "$TABLE" -s "$SCHEMA" 2>&1 | grep "CT Enabled on Table:" | awk '{print $NF}')
+    
+    if [ "$CT_TABLE_STATUS" = "Yes" ]; then
+        log_warn "Change Tracking already enabled on table $SCHEMA.$TABLE"
+    else
+        # Enable CT on table
+        run_cmd_allow_fail \
+            "./qadmcli.sh mssql ct enable-table -t \"$TABLE\" -s \"$SCHEMA\" 2>&1 | tail -3" \
+            "Enable CT on table $SCHEMA.$TABLE"
+    fi
     
     # Verify CT status
     run_cmd \
@@ -346,72 +367,98 @@ else
         --target-password "$MSSQL_PASSWORD" \
         --target-database "$DATABASE" 2>&1)
     
-    # Extract pipeline ID
-    PIPELINE_ID=$(echo "$PIPELINE_OUTPUT" | grep -oP '(?<=Pipeline ID: )\w+' | head -1)
+    PIPELINE_EXIT_CODE=$?
     
-    if [ -z "$PIPELINE_ID" ]; then
-        log_error "Failed to create pipeline"
-        echo "$PIPELINE_OUTPUT"
-        exit 1
+    if [ $PIPELINE_EXIT_CODE -ne 0 ]; then
+        log_error "Failed to create pipeline (exit code: $PIPELINE_EXIT_CODE)"
+        echo "$PIPELINE_OUTPUT" | tail -20
+        log_error "Skipping to next phase..."
+        PIPELINE_ID=""
+    else
+        # Extract pipeline ID
+        PIPELINE_ID=$(echo "$PIPELINE_OUTPUT" | grep -oP '(?<=Pipeline ID: )\w+' | head -1)
+        
+        if [ -z "$PIPELINE_ID" ]; then
+            log_error "Failed to extract pipeline ID from output"
+            echo "$PIPELINE_OUTPUT" | tail -10
+            log_error "Skipping to next phase..."
+        else
+            log_success "Pipeline created with ID: $PIPELINE_ID"
+        fi
     fi
-    
-    log_success "Pipeline created with ID: $PIPELINE_ID"
+fi
+
+# If no pipeline ID, we can't continue with entities
+if [ -z "$PIPELINE_ID" ]; then
+    log_error "No pipeline available, skipping entity creation and replication phases"
+    log_warn "You can manually create pipeline and entities via GlueSync UI"
+    log_info "Continuing with mockup data generation for testing purposes..."
+    # Don't exit, continue with demo
 fi
 
 # Add entities to pipeline
-for TABLE in "${TABLES[@]}"; do
-    log_info "Adding entity: $LIBRARY.$TABLE -> $SCHEMA.$TABLE..."
-    
-    ENTITY_OUTPUT=$(python3 gluesync_cli_v2.py create entity \
-        --pipeline "$PIPELINE_ID" \
-        --source-library "$LIBRARY" \
-        --source-table "$TABLE" \
-        --target-schema "$SCHEMA" \
-        --target-table "$TABLE" \
-        --polling-interval 500 \
-        --batch-size 1000 2>&1)
-    
-    ENTITY_ID=$(echo "$ENTITY_OUTPUT" | grep -oP '(?<=Entity ID: )\w+' | head -1)
-    
-    if [ -z "$ENTITY_ID" ]; then
-        log_warn "Entity may already exist for $TABLE"
-    else
-        log_success "Entity created with ID: $ENTITY_ID"
-    fi
-done
+if [ -n "$PIPELINE_ID" ]; then
+    for TABLE in "${TABLES[@]}"; do
+        log_info "Adding entity: $LIBRARY.$TABLE -> $SCHEMA.$TABLE..."
+        
+        ENTITY_OUTPUT=$(python3 gluesync_cli_v2.py create entity \
+            --pipeline "$PIPELINE_ID" \
+            --source-library "$LIBRARY" \
+            --source-table "$TABLE" \
+            --target-schema "$SCHEMA" \
+            --target-table "$TABLE" \
+            --polling-interval 500 \
+            --batch-size 1000 2>&1)
+        
+        ENTITY_ID=$(echo "$ENTITY_OUTPUT" | grep -oP '(?<=Entity ID: )\w+' | head -1)
+        
+        if [ -z "$ENTITY_ID" ]; then
+            log_warn "Entity may already exist for $TABLE"
+        else
+            log_success "Entity created with ID: $ENTITY_ID"
+        fi
+    done
+else
+    log_warn "Skipping entity creation (no pipeline available)"
+fi
 
 ###############################################################################
 # PHASE 4: START REPLICATION
 ###############################################################################
 log_section "PHASE 4: Start Replication"
 
-cd "$GLUESYNC_DIR"
-
-for TABLE in "${TABLES[@]}"; do
-    log_info "Starting entity for $TABLE (Snapshot + CDC mode)..."
+if [ -n "$PIPELINE_ID" ]; then
+    cd "$GLUESYNC_DIR"
     
-    # Get entity ID
-    ENTITY_ID=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
-                grep "$TABLE" | awk '{print $1}' | head -1)
+    for TABLE in "${TABLES[@]}"; do
+        log_info "Starting entity for $TABLE (Snapshot + CDC mode)..."
+        
+        # Get entity ID
+        ENTITY_ID=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
+                    grep "$TABLE" | awk '{print $1}' | head -1)
+        
+        if [ -z "$ENTITY_ID" ]; then
+            log_error "Entity not found for table $TABLE"
+            continue
+        fi
+        
+        # Start entity with snapshot mode (initial load + CDC)
+        python3 gluesync_cli_v2.py start entity "$ENTITY_ID" \
+            --pipeline "$PIPELINE_ID" \
+            --mode snapshot 2>&1 | tail -5
+        
+        log_success "Entity $TABLE started in snapshot mode"
+        
+        # Wait a moment for snapshot to begin
+        sleep 2
+    done
     
-    if [ -z "$ENTITY_ID" ]; then
-        log_error "Entity not found for table $TABLE"
-        continue
-    fi
-    
-    # Start entity with snapshot mode (initial load + CDC)
-    python3 gluesync_cli_v2.py start entity "$ENTITY_ID" \
-        --pipeline "$PIPELINE_ID" \
-        --mode snapshot 2>&1 | tail -5
-    
-    log_success "Entity $TABLE started in snapshot mode"
-    
-    # Wait a moment for snapshot to begin
-    sleep 2
-done
-
-log_info "Waiting 10 seconds for initial snapshot to complete..."
-sleep 10
+    log_info "Waiting 10 seconds for initial snapshot to complete..."
+    sleep 10
+else
+    log_warn "Skipping replication start (no pipeline available)"
+    log_info "You can manually start replication via GlueSync UI"
+fi
 
 ###############################################################################
 # PHASE 5: GENERATE MOCKUP DATA ON SOURCE
