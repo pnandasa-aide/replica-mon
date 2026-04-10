@@ -29,18 +29,61 @@ class AS400JournalReader:
         except subprocess.CalledProcessError as e:
             return {'error': e.stderr or e.stdout, 'success': False}
     
-    def get_changes(self, table: str, since: str) -> dict:
+    def get_summary(self, table: str, since: Optional[str] = None) -> dict:
         """
-        Get journal changes for a table since a timestamp.
+        Get journal summary for comparison with MSSQL CT.
         
         Args:
             table: Table name in format "LIBRARY.TABLE"
-            since: Timestamp in format "YYYY-MM-DD HH:MM:SS"
+            since: Optional timestamp in format "YYYY-MM-DD HH:MM:SS"
+            
+        Returns:
+            Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'entries'
+        """
+        parts = table.split('.')
+        if len(parts) != 2:
+            raise ValueError(f"Table must be in format LIBRARY.TABLE, got: {table}")
+        
+        library, table_name = parts
+        
+        # Call qadmcli with summary format
+        cmd_args = [
+            "journal", "entries",
+            "-n", table_name,
+            "-l", library,
+            "--format", "summary"
+        ]
+        
+        if since:
+            cmd_args.extend(["--from-time", since])
+        
+        result = self._run_qadmcli(*cmd_args)
+        
+        if 'error' in result:
+            return {
+                'table': table,
+                'total': 0,
+                'inserts': 0,
+                'updates': 0,
+                'deletes': 0,
+                'entries': [],
+                'error': result.get('error', 'Unknown error')
+            }
+        
+        return result
+    
+    def get_changes(self, table: str, since: Optional[str] = None, limit: int = 100) -> dict:
+        """
+        Get journal entries for a table.
+        
+        Args:
+            table: Table name in format "LIBRARY.TABLE"
+            since: Optional timestamp in format "YYYY-MM-DD HH:MM:SS"
+            limit: Maximum entries to return
             
         Returns:
             Dict with 'total', 'inserts', 'updates', 'deletes', 'entries'
         """
-        # Parse library and table
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format LIBRARY.TABLE, got: {table}")
@@ -48,31 +91,35 @@ class AS400JournalReader:
         library, table_name = parts
         
         # Call qadmcli to get journal entries
-        # This is a placeholder - actual implementation depends on qadmcli interface
-        result = self._run_qadmcli(
+        cmd_args = [
             "journal", "entries",
             "-n", table_name,
             "-l", library,
-            "--since", since,
-            "--format", "json"
-        )
+            "--format", "json",
+            "--limit", str(limit)
+        ]
         
-        if not result.get('success', True):
+        if since:
+            cmd_args.extend(["--from-time", since])
+        
+        result = self._run_qadmcli(*cmd_args)
+        
+        if 'error' in result:
             raise RuntimeError(f"qadmcli failed: {result.get('error')}")
         
         # Parse and categorize entries
-        entries = result.get('entries', [])
+        entries = result if isinstance(result, list) else result.get('entries', [])
         
-        inserts = sum(1 for e in entries if e.get('entry_type') in ['PT', 'INSERT'])
-        updates = sum(1 for e in entries if e.get('entry_type') in ['UP', 'UPDATE'])
-        deletes = sum(1 for e in entries if e.get('entry_type') in ['DL', 'DELETE'])
+        inserts = sum(1 for e in entries if e.get('code') == 'PT')
+        updates = sum(1 for e in entries if e.get('code') == 'UP')
+        deletes = sum(1 for e in entries if e.get('code') == 'DL')
         
         return {
             'total': len(entries),
             'inserts': inserts,
             'updates': updates,
             'deletes': deletes,
-            'entries': entries[:100]  # Limit for performance
+            'entries': entries[:limit]
         }
     
     def get_record(self, table: str, pk_column: str, pk_value: str) -> Optional[dict]:

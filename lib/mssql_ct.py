@@ -28,36 +28,82 @@ class MSSQLCTReader:
         except subprocess.CalledProcessError as e:
             return {'error': e.stderr or e.stdout, 'success': False}
     
-    def get_changes(self, table: str, since: str) -> dict:
+    def get_summary(self, table: str, since: Optional[str] = None) -> dict:
         """
-        Get Change Tracking changes for a table since a timestamp.
+        Get Change Tracking summary for comparison with AS400 journal.
         
         Args:
             table: Table name in format "SCHEMA.TABLE"
-            since: Timestamp in format "YYYY-MM-DD HH:MM:SS"
+            since: Optional timestamp in format "YYYY-MM-DD HH:MM:SS"
             
         Returns:
-            Dict with 'total', 'inserts', 'updates', 'deletes', 'changes'
+            Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'changes'
         """
-        # Parse schema and table
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format SCHEMA.TABLE, got: {table}")
         
         schema, table_name = parts
         
-        # Call qadmcli to get CT changes
-        # This requires qadmcli to have mssql_ct support
-        result = self._run_qadmcli(
-            "mssql", "ct-changes",
+        # Call qadmcli with summary format
+        cmd_args = [
+            "mssql", "ct", "changes",
             "-t", table_name,
             "-s", schema,
-            "--since", since,
-            "--format", "json"
-        )
+            "--format", "summary"
+        ]
         
-        if not result.get('success', True):
-            # CT might not be enabled - return empty result
+        if since:
+            cmd_args.extend(["--since", since])
+        
+        result = self._run_qadmcli(*cmd_args)
+        
+        if 'error' in result:
+            return {
+                'table': table,
+                'total': 0,
+                'inserts': 0,
+                'updates': 0,
+                'deletes': 0,
+                'changes': [],
+                'error': result.get('error', 'Unknown error')
+            }
+        
+        return result
+    
+    def get_changes(self, table: str, since: Optional[str] = None, limit: int = 1000) -> dict:
+        """
+        Get Change Tracking changes for a table.
+        
+        Args:
+            table: Table name in format "SCHEMA.TABLE"
+            since: Optional timestamp in format "YYYY-MM-DD HH:MM:SS"
+            limit: Maximum changes to return
+            
+        Returns:
+            Dict with 'total', 'inserts', 'updates', 'deletes', 'changes'
+        """
+        parts = table.split('.')
+        if len(parts) != 2:
+            raise ValueError(f"Table must be in format SCHEMA.TABLE, got: {table}")
+        
+        schema, table_name = parts
+        
+        # Call qadmcli to get CT changes in JSON format
+        cmd_args = [
+            "mssql", "ct", "changes",
+            "-t", table_name,
+            "-s", schema,
+            "--format", "json",
+            "--limit", str(limit)
+        ]
+        
+        if since:
+            cmd_args.extend(["--since", since])
+        
+        result = self._run_qadmcli(*cmd_args)
+        
+        if 'error' in result:
             return {
                 'total': 0,
                 'inserts': 0,
@@ -67,19 +113,19 @@ class MSSQLCTReader:
                 'error': result.get('error', 'Unknown error')
             }
         
-        changes = result.get('changes', [])
+        changes = result if isinstance(result, list) else result.get('changes', [])
         
         # Categorize by operation type
-        inserts = sum(1 for c in changes if c.get('operation') == 'I')
-        updates = sum(1 for c in changes if c.get('operation') == 'U')
-        deletes = sum(1 for c in changes if c.get('operation') == 'D')
+        inserts = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'I' or c.get('operation') == 'I')
+        updates = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'U' or c.get('operation') == 'U')
+        deletes = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'D' or c.get('operation') == 'D')
         
         return {
             'total': len(changes),
             'inserts': inserts,
             'updates': updates,
             'deletes': deletes,
-            'changes': changes[:100]  # Limit for performance
+            'changes': changes[:limit]
         }
     
     def get_record(self, table: str, pk_column: str, pk_value: str) -> Optional[dict]:
@@ -122,13 +168,12 @@ class MSSQLCTReader:
         schema, table_name = parts
         
         result = self._run_qadmcli(
-            "mssql", "ct-status",
+            "mssql", "ct", "status",
             "-t", table_name,
-            "-s", schema,
-            "--format", "json"
+            "-s", schema
         )
         
-        if not result.get('success', True):
+        if 'error' in result:
             return False
         
-        return result.get('ct_enabled', False)
+        return result.get('ct_enabled_on_table', False) or result.get('is_enabled_on_table', False)
