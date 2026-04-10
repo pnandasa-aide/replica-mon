@@ -345,81 +345,52 @@ cd "$GLUESYNC_DIR"
 
 # Step 1: Check if pipeline already exists
 log_info "Checking for existing pipeline..."
-EXISTING_PIPELINE=$(python3 gluesync_cli_v2.py list pipelines 2>&1 | grep -i "demo" | head -1)
+EXISTING_PIPELINE=$(python3 gluesync_cli_v2.py get pipelines 2>&1 | grep -i "demo" | head -1)
 
 if [ -n "$EXISTING_PIPELINE" ]; then
     log_warn "Pipeline already exists, using existing one"
     PIPELINE_ID=$(echo "$EXISTING_PIPELINE" | awk '{print $1}')
     log_info "Pipeline ID: $PIPELINE_ID"
 else
-    # Create new pipeline
-    log_info "Creating new pipeline: $PIPELINE_NAME..."
+    log_warn "Pipeline not found - please create via UI first"
+    log_warn "Then set PIPELINE_ID manually and re-run this script"
+    PIPELINE_ID=""
+fi
+
+# Step 2: Ensure pipeline is not in maintenance mode
+if [ -n "$PIPELINE_ID" ]; then
+    log_info "Ensuring pipeline is not in maintenance mode..."
+    python3 gluesync_cli_v2.py maintenance exit "$PIPELINE_ID" 2>/dev/null || true
     
-    PIPELINE_OUTPUT=$(python3 gluesync_cli_v2.py create pipeline \
-        --name "$PIPELINE_NAME" \
-        --source-type AS400 \
-        --target-type MSSQL \
-        --source-host "${AS400_HOST:-161.82.146.249}" \
-        --source-user "$AS400_USER" \
-        --source-password "$AS400_PASSWORD" \
-        --target-host "${MSSQL_HOST:-192.168.13.62}" \
-        --target-user "$MSSQL_USER" \
-        --target-password "$MSSQL_PASSWORD" \
-        --target-database "$DATABASE" 2>&1)
+    # Step 3: Verify agents are available
+    log_info "Checking agents..."
+    AGENT_COUNT=$(python3 gluesync_cli_v2.py agents "$PIPELINE_ID" 2>&1 | grep -c "agentId" || echo "0")
     
-    PIPELINE_EXIT_CODE=$?
-    
-    if [ $PIPELINE_EXIT_CODE -ne 0 ]; then
-        log_error "Failed to create pipeline (exit code: $PIPELINE_EXIT_CODE)"
-        echo "$PIPELINE_OUTPUT" | tail -20
-        log_error "Cannot continue with replication phases"
+    if [ "$AGENT_COUNT" -lt 2 ]; then
+        log_error "Agents not configured! Please configure source and target agents via UI first"
+        log_error "Access: https://localhost:1717/ui/"
         PIPELINE_ID=""
     else
-        # Extract pipeline ID
-        PIPELINE_ID=$(echo "$PIPELINE_OUTPUT" | grep -oP '(?<=Pipeline ID: )\w+' | head -1)
-        
-        if [ -z "$PIPELINE_ID" ]; then
-            log_error "Failed to extract pipeline ID from output"
-            echo "$PIPELINE_OUTPUT" | tail -10
-            log_error "Cannot continue with replication phases"
-        else
-            log_success "Pipeline created with ID: $PIPELINE_ID"
-        fi
+        log_success "Agents verified ($AGENT_COUNT agents found)"
     fi
 fi
 
-# Step 2: Check/add entities for each table
+# Step 4: Check/add entities for each table
 if [ -n "$PIPELINE_ID" ]; then
     for TABLE in "${TABLES[@]}"; do
         log_info "Checking entity for $LIBRARY.$TABLE -> $SCHEMA.$TABLE..."
         
         # Check if entity already exists for this table mapping
-        EXISTING_ENTITY=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
+        EXISTING_ENTITY=$(python3 gluesync_cli_v2.py get entities --pipeline "$PIPELINE_ID" 2>&1 | \
                          grep "$TABLE" | grep "$LIBRARY" | head -1)
         
         if [ -n "$EXISTING_ENTITY" ]; then
             ENTITY_ID=$(echo "$EXISTING_ENTITY" | awk '{print $1}')
             log_warn "Entity already exists for $TABLE (ID: $ENTITY_ID), skipping creation"
         else
-            log_info "Adding new entity: $LIBRARY.$TABLE -> $SCHEMA.$TABLE..."
-            
-            ENTITY_OUTPUT=$(python3 gluesync_cli_v2.py create entity \
-                --pipeline "$PIPELINE_ID" \
-                --source-library "$LIBRARY" \
-                --source-table "$TABLE" \
-                --target-schema "$SCHEMA" \
-                --target-table "$TABLE" \
-                --polling-interval 500 \
-                --batch-size 1000 2>&1)
-            
-            ENTITY_ID=$(echo "$ENTITY_OUTPUT" | grep -oP '(?<=Entity ID: )\w+' | head -1)
-            
-            if [ -z "$ENTITY_ID" ]; then
-                log_error "Failed to create entity for $TABLE"
-                echo "$ENTITY_OUTPUT" | tail -10
-            else
-                log_success "Entity created with ID: $ENTITY_ID"
-            fi
+            log_warn "Entity creation requires schema discovery"
+            log_warn "Please add entity via UI or use gluesync-cli with known schema"
+            log_warn "See: ~/gluesync-cli/WORKFLOW_GUIDE.md"
         fi
     done
 else
@@ -439,7 +410,7 @@ if [ -n "$PIPELINE_ID" ]; then
         log_info "Checking entity status for $TABLE..."
         
         # Get entity ID
-        ENTITY_ID=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
+        ENTITY_ID=$(python3 gluesync_cli_v2.py get entities --pipeline "$PIPELINE_ID" 2>&1 | \
                     grep "$TABLE" | awk '{print $1}' | head -1)
         
         if [ -z "$ENTITY_ID" ]; then
@@ -447,21 +418,15 @@ if [ -n "$PIPELINE_ID" ]; then
             continue
         fi
         
-        # Check if entity is already running
-        ENTITY_STATUS=$(python3 gluesync_cli_v2.py list entities --pipeline "$PIPELINE_ID" 2>&1 | \
-                       grep "$TABLE" | awk '{print $3}' | head -1)
+        log_info "Starting entity for $TABLE (Snapshot + CDC mode)..."
         
-        if [ "$ENTITY_STATUS" = "RUNNING" ] || [ "$ENTITY_STATUS" = "ACTIVE" ]; then
-            log_warn "Entity for $TABLE is already running (Status: $ENTITY_STATUS)"
-        else
-            log_info "Starting entity for $TABLE (Snapshot + CDC mode)..."
-            
-            # Start entity with snapshot mode (initial load + CDC)
-            python3 gluesync_cli_v2.py start entity "$ENTITY_ID" \
-                --pipeline "$PIPELINE_ID" \
-                --mode snapshot 2>&1 | tail -5
-            
+        # Start entity with snapshot mode (initial load + CDC)
+        if python3 gluesync_cli_v2.py start "$ENTITY_ID" \
+            --pipeline "$PIPELINE_ID" \
+            --mode snapshot 2>&1; then
             log_success "Entity $TABLE started in snapshot mode"
+        else
+            log_error "Failed to start entity $TABLE"
         fi
         
         # Wait a moment for snapshot to begin
