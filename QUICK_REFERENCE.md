@@ -52,8 +52,8 @@ cd ~/_qoder/qadmcli
 
 # Enable CT on database (once per database)
 ./qadmcli.sh mssql ct enable-db \
-    --admin-user sa \
-    --admin-password 'P@ssw0rd' \
+    --admin-user $MSSQL_ADMIN_USER \
+    --admin-password $MSSQL_ADMIN_PASSWORD \
     --retention 2
 
 # Enable CT on table
@@ -341,7 +341,7 @@ cd ~/_qoder/qadmcli
 ./qadmcli.sh mssql ct status
 
 # Enable if needed
-./qadmcli.sh mssql ct enable-db --admin-user sa --admin-password 'P@ssw0rd'
+./qadmcli.sh mssql ct enable-db --admin-user $MSSQL_ADMIN_USER --admin-password $MSSQL_ADMIN_PASSWORD
 ```
 
 ### Journal Not Enabled
@@ -369,19 +369,21 @@ python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS
 
 ```bash
 # AS400
-AS400_USER=user001
-AS400_PASSWORD=pwdN03xpr
+AS400_USER=your_as400_user
+AS400_PASSWORD=your_as400_password
 
 # MSSQL
-MSSQL_USER=gstgdblogin
-MSSQL_PASSWORD='tar53t@dm1n'
-MSSQL_ADMIN_USER='sa'
-MSSQL_ADMIN_PASSWORD='P@ssw0rd'
+MSSQL_USER=your_mssql_user
+MSSQL_PASSWORD=your_mssql_password
+MSSQL_ADMIN_USER=your_mssql_admin_user
+MSSQL_ADMIN_PASSWORD=your_mssql_admin_password
 
 # GlueSync
-GLUESYNC_ADMIN_USERNAME=admin
-GLUESYNC_ADMIN_PASSWORD='P@ssw0rd'
+GLUESYNC_ADMIN_USERNAME=your_gluesync_admin
+GLUESYNC_ADMIN_PASSWORD=your_gluesync_password
 ```
+
+**⚠️ Security Note:** Use environment variables or a `.env` file. Never hardcode credentials in scripts or documentation.
 
 ---
 

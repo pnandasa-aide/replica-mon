@@ -22,17 +22,19 @@ Create a `.env` file in the parent directory (`~/_qoder/.env`):
 
 ```bash
 # AS400 Source Database
-AS400_USER=user001
-AS400_PASSWORD=pwdN03xpr
+AS400_USER=your_as400_user
+AS400_PASSWORD=your_as400_password
 
 # MSSQL Target Database
-MSSQL_USER=gstgdblogin
-MSSQL_PASSWORD='tar53t@dm1n'
+MSSQL_USER=your_mssql_user
+MSSQL_PASSWORD=your_mssql_password
 
 # MSSQL Admin (for CT operations)
-MSSQL_ADMIN_USER='sa'
-MSSQL_ADMIN_PASSWORD='P@ssw0rd'
+MSSQL_ADMIN_USER=your_mssql_admin_user
+MSSQL_ADMIN_PASSWORD=your_mssql_admin_password
 ```
+
+**⚠️ Security Note:** Never commit actual credentials to version control. Use environment variables or a `.env` file (added to `.gitignore`).
 
 ## Quick Start
 
