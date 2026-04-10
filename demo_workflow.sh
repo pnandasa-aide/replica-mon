@@ -128,6 +128,7 @@ log_info "Environment loaded from $ENV_FILE"
 # Parse arguments
 MODE="single"
 DRY_RUN=false
+SHOW_HELP=false
 
 for arg in "$@"; do
     case $arg in
@@ -137,13 +138,54 @@ for arg in "$@"; do
         --dry-run)
             DRY_RUN=true
             ;;
+        --help|-h)
+            SHOW_HELP=true
+            ;;
         *)
             log_error "Unknown argument: $arg"
-            log_error "Usage: $0 [single|multi] [--dry-run]"
+            log_error "Usage: $0 [single|multi] [--dry-run] [--help]"
             exit 1
             ;;
     esac
 done
+
+# Show help if requested
+if [ "$SHOW_HELP" = true ]; then
+    echo "GlueSync End-to-End Demo Workflow"
+    echo ""
+    echo "Usage:"
+    echo "  $0 [single|multi] [--dry-run] [--help]"
+    echo ""
+    echo "Modes:"
+    echo "  single     - Demo with single table (default)"
+    echo "  multi      - Demo with multiple tables"
+    echo ""
+    echo "Options:"
+    echo "  --dry-run  - Show commands without executing (safe testing)"
+    echo "  --help     - Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  $0 single              # Run single table demo"
+    echo "  $0 multi               # Run multi-table demo"
+    echo "  $0 single --dry-run    # Preview commands without execution"
+    echo ""
+    echo "Workflow Phases:"
+    echo "  1. Create Source Table on AS400 (with journaling)"
+    echo "  2. Create Target Table on MSSQL (with Change Tracking)"
+    echo "  3. Create GlueSync Pipeline and Add Entities"
+    echo "  4. Start Replication (Snapshot + CDC mode)"
+    echo "  5. Generate Mockup Data on Source"
+    echo "  6. Verify Replication via Journal Entries and CT"
+    echo "  7. Run Comparison Report"
+    echo "  8. Summary"
+    echo ""
+    echo "Features:"
+    echo "  - Checks if tables exist before creating"
+    echo "  - Skips already created resources"
+    echo "  - Validates environment before execution"
+    echo "  - Supports dry-run mode for safe testing"
+    exit 0
+fi
 
 log_info "Running in mode: $MODE"
 if [ "$DRY_RUN" = true ]; then
@@ -197,21 +239,30 @@ fi
 LIBRARY="GSLIBTST"
 
 for TABLE in "${TABLES[@]}"; do
-    log_info "Creating table: $LIBRARY.$TABLE with journaling..."
+    log_info "Checking if table $LIBRARY.$TABLE exists on AS400..."
     
     cd "$QADMCLI_DIR"
     
-    # Create table on AS400
-    run_cmd_allow_fail \
-        "./qadmcli.sh sql execute --database as400 -q \"CREATE TABLE $LIBRARY.$TABLE (CUST_ID BIGINT NOT NULL PRIMARY KEY, FIRST_NAME VARCHAR(50), LAST_NAME VARCHAR(50), EMAIL VARCHAR(100), PHONE VARCHAR(20), CREATED_DATE TIMESTAMP, STATUS VARCHAR(20))\" 2>&1 | tail -5" \
-        "Create AS400 table $LIBRARY.$TABLE"
+    # Check if table exists
+    TABLE_EXISTS=$(./qadmcli.sh sql execute -q "SELECT COUNT(*) FROM QSYS2.SYSTABLES WHERE TABLE_SCHEMA='$LIBRARY' AND TABLE_NAME='$TABLE'" 2>&1 | grep -oP '^\d+' | head -1)
+    
+    if [ "$TABLE_EXISTS" = "1" ]; then
+        log_warn "Table $LIBRARY.$TABLE already exists, skipping creation"
+    else
+        log_info "Creating table: $LIBRARY.$TABLE with journaling..."
+        
+        # Create table on AS400
+        run_cmd_allow_fail \
+            "./qadmcli.sh sql execute -q \"CREATE TABLE $LIBRARY.$TABLE (CUST_ID BIGINT NOT NULL PRIMARY KEY, FIRST_NAME VARCHAR(50), LAST_NAME VARCHAR(50), EMAIL VARCHAR(100), PHONE VARCHAR(20), CREATED_DATE TIMESTAMP, STATUS VARCHAR(20))\" 2>&1 | tail -5" \
+            "Create AS400 table $LIBRARY.$TABLE"
+    fi
     
     # Enable journaling on table
     run_cmd_allow_fail \
         "./qadmcli.sh journal enable -n \"$TABLE\" -l \"$LIBRARY\" 2>&1 | tail -3" \
         "Enable journaling on $LIBRARY.$TABLE"
     
-    log_success "Table $LIBRARY.$TABLE created with journaling"
+    log_success "Table $LIBRARY.$TABLE ready with journaling"
 done
 
 ###############################################################################
@@ -223,14 +274,23 @@ SCHEMA="dbo"
 DATABASE="GSTargetDB"
 
 for TABLE in "${TABLES[@]}"; do
-    log_info "Creating table: $SCHEMA.$TABLE with CT enabled..."
+    log_info "Checking if table $SCHEMA.$TABLE exists on MSSQL..."
     
     cd "$QADMCLI_DIR"
     
-    # Create table on MSSQL
-    run_cmd_allow_fail \
-        "./qadmcli.sh sql execute --database mssql -q \"IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='$TABLE' and xtype='U') CREATE TABLE $SCHEMA.$TABLE (CUST_ID BIGINT PRIMARY KEY, FIRST_NAME NVARCHAR(50), LAST_NAME NVARCHAR(50), EMAIL NVARCHAR(100), PHONE NVARCHAR(20), CREATED_DATE DATETIME2, STATUS NVARCHAR(20))\" 2>&1 | tail -3" \
-        "Create MSSQL table $SCHEMA.$TABLE"
+    # Check if table exists
+    TABLE_EXISTS=$(./qadmcli.sh sql execute -t mssql -q "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$SCHEMA' AND TABLE_NAME='$TABLE'" 2>&1 | grep -oP '^\d+' | head -1)
+    
+    if [ "$TABLE_EXISTS" = "1" ]; then
+        log_warn "Table $SCHEMA.$TABLE already exists, skipping creation"
+    else
+        log_info "Creating table: $SCHEMA.$TABLE with CT enabled..."
+        
+        # Create table on MSSQL
+        run_cmd_allow_fail \
+            "./qadmcli.sh sql execute -t mssql -q \"CREATE TABLE $SCHEMA.$TABLE (CUST_ID BIGINT PRIMARY KEY, FIRST_NAME NVARCHAR(50), LAST_NAME NVARCHAR(50), EMAIL NVARCHAR(100), PHONE NVARCHAR(20), CREATED_DATE DATETIME2, STATUS NVARCHAR(20))\" 2>&1 | tail -3" \
+            "Create MSSQL table $SCHEMA.$TABLE"
+    fi
     
     # Enable Change Tracking on database (if not already enabled)
     if [ "$TABLE" = "${TABLES[0]}" ]; then
@@ -249,7 +309,7 @@ for TABLE in "${TABLES[@]}"; do
         "./qadmcli.sh mssql ct status -t \"$TABLE\" -s \"$SCHEMA\" 2>&1 | grep -E \"CT Enabled|Error\" | head -2" \
         "Verify CT status for $SCHEMA.$TABLE"
     
-    log_success "Table $SCHEMA.$TABLE created with CT enabled"
+    log_success "Table $SCHEMA.$TABLE ready with CT enabled"
 done
 
 ###############################################################################
