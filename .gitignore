@@ -10,7 +10,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# lib/ - Keep source files, ignore compiled
+!lib/*.py
+lib/__pycache__/
 lib64/
 parts/
 sdist/

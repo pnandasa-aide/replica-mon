@@ -56,6 +56,51 @@ def generate_report(
     # 2. Get MSSQL CT summary
     print("[2/3] Querying MSSQL Change Tracking...")
     ct_reader = MSSQLCTReader()
+    
+    # Check if CT is enabled first
+    ct_enabled = ct_reader.is_ct_enabled(target_table)
+    if not ct_enabled:
+        print(f"  ⚠️  Change Tracking is NOT enabled on {target_table}")
+        print(f"  ⚠️  Falling back to COUNT(*) comparison (no CT log to cross-check)")
+        print()
+        
+        # Fallback to row count comparison
+        print("=" * 70)
+        print("FALLBACK MODE: Row Count Comparison (CT Not Enabled)")
+        print("=" * 70)
+        print()
+        print("⚠️  LIMITATION: Without Change Tracking, we can only compare")
+        print("    current row counts, not operation history.")
+        print("    This cannot detect: missed updates, deleted & reinserted rows,")
+        print("    or operations that cancelled each other out.")
+        print()
+        
+        # Import and use row count comparison
+        try:
+            from lib.row_count import compare_row_counts
+            row_comparison = compare_row_counts(source_table, target_table)
+            
+            print(f"{'Table':<25} {'Row Count':>12} {'Status':>10}")
+            print("-" * 50)
+            print(f"{'Source (AS400)':<25} {row_comparison['source_count']:>12} {'✅':>10}")
+            print(f"{'Target (MSSQL)':<25} {row_comparison['target_count']:>12} {'✅':>10}")
+            print("-" * 50)
+            
+            diff = row_comparison['difference']
+            status = "✅" if diff == 0 else "❌"
+            print(f"{'Difference':<25} {diff:>+12} {status:>10}")
+            print("=" * 50)
+            
+            if row_comparison['match']:
+                print("\n✅ Row counts match!")
+            else:
+                print(f"\n⚠️  Row count mismatch: {diff} rows")
+            print()
+        except ImportError:
+            print("  ✗ Row count comparison not available")
+            print("  Install with: pip install row_count module")
+        return
+    
     try:
         ct_summary = ct_reader.get_summary(target_table, since)
         print(f"  ✓ Retrieved {ct_summary.get('total', 0)} CT changes")
