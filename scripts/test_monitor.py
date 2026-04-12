@@ -46,7 +46,8 @@ class TestMonitor:
         output_file: str = None,
         wait_seconds: int = 120,
         library: str = "GSLIBTST",
-        target_schema: str = "dbo"
+        target_schema: str = "dbo",
+        base_dir: str = None
     ):
         """
         Initialize test monitor.
@@ -59,6 +60,7 @@ class TestMonitor:
             wait_seconds: Seconds to wait for CDC replication
             library: AS400 library name
             target_schema: MSSQL target schema
+            base_dir: Base directory for finding other tools
         """
         self.tables = tables or ["CUSTOMERS", "CUSTOMERS2", "ORDERS"]
         self.rows_per_table = rows_per_table
@@ -67,6 +69,17 @@ class TestMonitor:
         self.wait_seconds = wait_seconds
         self.library = library
         self.target_schema = target_schema
+        
+        # Determine base directory (parent of replica-mon)
+        if base_dir is None:
+            # Default: go up 2 levels from scripts/ -> replica-mon/ -> _qoder/
+            self.base_dir = str(Path(__file__).parent.parent.parent)
+        else:
+            self.base_dir = base_dir
+        
+        # Tool paths
+        self.qadmcli_path = os.path.join(self.base_dir, "qadmcli", "qadmcli.sh")
+        self.compare_script = os.path.join(self.base_dir, "replica-mon", "compare.py")
         
         # Results storage
         self.results = {
@@ -132,7 +145,7 @@ class TestMonitor:
         print(f"{'─'*70}")
         
         cmd = [
-            "../qadmcli/qadmcli.sh",
+            self.qadmcli_path,
             "mockup", "generate",
             "-t", table_name,
             "-l", self.library,
@@ -236,7 +249,7 @@ class TestMonitor:
         
         # Fallback to subprocess
         cmd = [
-            "python3", "compare.py",
+            "python3", self.compare_script,
             "--source", table_mapping['source'],
             "--target", table_mapping['target'],
             "--format", self.output_format
@@ -265,7 +278,7 @@ class TestMonitor:
         
         # AS400 count
         cmd_source = [
-            "../qadmcli/qadmcli.sh",
+            self.qadmcli_path,
             "sql", "execute",
             "-q", f"SELECT COUNT(*) as CNT FROM {table_mapping['source']}"
         ]
@@ -279,10 +292,11 @@ class TestMonitor:
                     break
         
         # MSSQL count
+        target_parts = table_mapping['target'].split('.')
         cmd_target = [
-            "../qadmcli/qadmcli.sh",
+            self.qadmcli_path,
             "mssql", "query",
-            "-q", f"SELECT COUNT(*) as CNT FROM [{table_mapping['target'].split('.')[0]}].[{table_mapping['target'].split('.')[1]}]",
+            "-q", f"SELECT COUNT(*) as CNT FROM [{target_parts[0]}].[{target_parts[1]}]",
             "--format", "json"
         ]
         
@@ -430,6 +444,51 @@ class TestMonitor:
         except Exception as e:
             print(f"❌ Failed to save report: {e}")
     
+    def validate_environment(self) -> bool:
+        """Validate that all required tools and paths exist."""
+        print(f"\n{'='*70}")
+        print(f"  Environment Validation")
+        print(f"{'='*70}")
+        
+        all_valid = True
+        
+        # Check qadmcli
+        if os.path.isfile(self.qadmcli_path):
+            print(f"  ✅ qadmcli: {self.qadmcli_path}")
+        else:
+            print(f"  ❌ qadmcli not found: {self.qadmcli_path}")
+            all_valid = False
+        
+        # Check compare.py
+        if os.path.isfile(self.compare_script):
+            print(f"  ✅ compare.py: {self.compare_script}")
+        else:
+            print(f"  ❌ compare.py not found: {self.compare_script}")
+            all_valid = False
+        
+        # Check base directory
+        if os.path.isdir(self.base_dir):
+            print(f"  ✅ Base directory: {self.base_dir}")
+        else:
+            print(f"  ❌ Base directory not found: {self.base_dir}")
+            all_valid = False
+        
+        print(f"{'='*70}")
+        
+        if not all_valid:
+            print(f"\n❌ Environment validation failed!")
+            print(f"\nExpected structure:")
+            print(f"  {self.base_dir}/")
+            print(f"    ├── qadmcli/")
+            print(f"    │   └── qadmcli.sh")
+            print(f"    └── replica-mon/")
+            print(f"        ├── compare.py")
+            print(f"        └── scripts/")
+            print(f"            └── test_monitor.py")
+            print(f"\nYou can override the base directory with --base-dir option")
+        
+        return all_valid
+    
     def run(self):
         """Run complete test suite."""
         print(f"\n{'#'*70}")
@@ -441,6 +500,11 @@ class TestMonitor:
         print(f"  CDC wait time: {self.wait_seconds}s")
         print(f"  Output format: {self.output_format}")
         print(f"{'#'*70}")
+        
+        # Validate environment first
+        if not self.validate_environment():
+            print(f"\n❌ Cannot proceed - environment validation failed")
+            return 1
         
         # Test each table
         for table_name in self.tables:
@@ -533,6 +597,12 @@ Examples:
         default="dbo",
         help="MSSQL target schema (default: dbo)"
     )
+    parser.add_argument(
+        "--base-dir",
+        type=str,
+        default=None,
+        help="Base directory for finding tools (default: auto-detect)"
+    )
     
     args = parser.parse_args()
     
@@ -551,7 +621,8 @@ Examples:
         output_file=args.output,
         wait_seconds=args.wait,
         library=args.library,
-        target_schema=args.schema
+        target_schema=args.schema,
+        base_dir=args.base_dir
     )
     
     exit_code = monitor.run()

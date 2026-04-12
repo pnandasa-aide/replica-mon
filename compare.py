@@ -7,6 +7,7 @@ Compares AS400 journal entries with MSSQL Change Tracking to detect discrepancie
 
 import json
 import sys
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +17,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.as400_journal import AS400JournalReader
 from lib.mssql_ct import MSSQLCTReader
 from lib.comparator import ChangeComparator
+
+
+def detect_qadmcli_path() -> str:
+    """Auto-detect qadmcli.sh path."""
+    # Try relative to this script (replica-mon/ -> _qoder/ -> qadmcli/)
+    script_dir = Path(__file__).parent
+    base_dir = script_dir.parent
+    qadmcli_path = base_dir / "qadmcli" / "qadmcli.sh"
+    
+    if qadmcli_path.exists():
+        return str(qadmcli_path)
+    
+    # Fallback to relative path
+    return "../qadmcli/qadmcli.sh"
 
 
 def generate_report(
@@ -43,9 +58,12 @@ def generate_report(
         print(f"Since: {since}")
     print()
     
+    # Auto-detect qadmcli path
+    qadmcli_path = detect_qadmcli_path()
+    
     # 1. Get AS400 journal summary
     print("[1/3] Querying AS400 journal...")
-    journal_reader = AS400JournalReader()
+    journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path)
     try:
         journal_summary = journal_reader.get_summary(source_table, since)
         print(f"  ✓ Retrieved {journal_summary.get('total', 0)} journal entries")
@@ -55,7 +73,7 @@ def generate_report(
     
     # 2. Get MSSQL CT summary
     print("[2/3] Querying MSSQL Change Tracking...")
-    ct_reader = MSSQLCTReader()
+    ct_reader = MSSQLCTReader(qadmcli_path=qadmcli_path)
     
     # Check if CT is enabled first
     ct_enabled = ct_reader.is_ct_enabled(target_table)

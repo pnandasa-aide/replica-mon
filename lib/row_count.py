@@ -2,12 +2,30 @@
 
 import subprocess
 import json
+import os
+from pathlib import Path
 from typing import Optional
 
 
-def run_qadmcli(*args) -> dict:
+def detect_qadmcli_path() -> str:
+    """Auto-detect qadmcli.sh path."""
+    # Try relative to this file (lib/ -> replica-mon/ -> _qoder/ -> qadmcli/)
+    lib_dir = Path(__file__).parent
+    base_dir = lib_dir.parent.parent
+    qadmcli_path = base_dir / "qadmcli" / "qadmcli.sh"
+    
+    if qadmcli_path.exists():
+        return str(qadmcli_path)
+    
+    # Fallback to relative path
+    return "../qadmcli/qadmcli.sh"
+
+
+def run_qadmcli(*args, qadmcli_path: str = None) -> dict:
     """Run qadmcli command and return parsed output."""
-    qadmcli_path = "../qadmcli/qadmcli.sh"
+    if qadmcli_path is None:
+        qadmcli_path = detect_qadmcli_path()
+    
     cmd = [qadmcli_path] + list(args)
     try:
         result = subprocess.run(
