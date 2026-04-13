@@ -44,7 +44,7 @@ class TestMonitor:
         rows_per_table: int = 10,
         output_format: str = "text",
         output_file: str = None,
-        wait_seconds: int = 120,
+        wait_seconds: int = 60,
         library: str = "GSLIBTST",
         target_schema: str = "dbo",
         base_dir: str = None
@@ -503,14 +503,14 @@ class TestMonitor:
         return all_valid
     
     def run(self):
-        """Run complete test suite."""
+        """Run complete test suite in batch mode."""
         print(f"\n{'#'*70}")
-        print(f"# REPLICATION TEST MONITOR")
+        print(f"# REPLICATION TEST MONITOR (BATCH MODE)")
         print(f"{'#'*70}")
         print(f"  Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"  Tables: {', '.join(self.tables)}")
         print(f"  Rows per table: {self.rows_per_table}")
-        print(f"  CDC wait time: {self.wait_seconds}s")
+        print(f"  CDC wait time: {self.wait_seconds}s (combined)")
         print(f"  Output format: {self.output_format}")
         print(f"{'#'*70}")
         
@@ -519,15 +519,89 @@ class TestMonitor:
             print(f"\n❌ Cannot proceed - environment validation failed")
             return 1
         
-        # Test each table
+        # PHASE 1: Generate all mockup data
+        print(f"\n{'='*70}")
+        print(f"  PHASE 1: Generate Mockup Data for All Tables")
+        print(f"{'='*70}")
+        
         for table_name in self.tables:
-            table_result = self.test_table(table_name)
-            self.results["tables"][table_name] = table_result
+            table_mapping = self.get_table_mapping(table_name)
+            table_result = {
+                "name": table_name,
+                "mapping": table_mapping,
+                "mockup": None,
+                "replication": None,
+                "row_counts": None,
+                "status": "pending"
+            }
             
-            # Small delay between tables
-            if table_name != self.tables[-1]:
-                print(f"\n⏱️  Waiting 5 seconds before next table...")
-                time.sleep(5)
+            # Generate mockup data
+            mockup_result = self.generate_mockup_data(table_name)
+            table_result["mockup"] = mockup_result
+            
+            if not mockup_result["success"]:
+                table_result["status"] = "failed"
+                self.results["summary"]["failed"] += 1
+                print(f"\n❌ Mockup generation FAILED for {table_name}")
+            else:
+                print(f"\n✅ Mockup generation succeeded for {table_name}")
+            
+            self.results["tables"][table_name] = table_result
+        
+        # Check if all mockups succeeded
+        failed_mockups = [t for t in self.results["tables"].values() if t["status"] == "failed"]
+        if failed_mockups:
+            print(f"\n❌ {len(failed_mockups)} table(s) failed mockup generation - aborting")
+            self.print_summary()
+            return 1
+        
+        # PHASE 2: Wait for replication (single combined wait)
+        print(f"\n{'='*70}")
+        print(f"  PHASE 2: Waiting {self.wait_seconds}s for CDC replication...")
+        print(f"{'='*70}")
+        print(f"  Tables: {', '.join(self.tables)}")
+        print(f"  (CDC typically replicates within 30-60 seconds)")
+        
+        for i in range(self.wait_seconds, 0, -10):
+            print(f"  ⏱️  {i} seconds remaining...", end='\r', flush=True)
+            time.sleep(10)
+        
+        print(f"\n  ✅ Wait complete - checking replication now")
+        
+        # PHASE 3: Check replication for all tables
+        print(f"\n{'='*70}")
+        print(f"  PHASE 3: Verify Replication for All Tables")
+        print(f"{'='*70}")
+        
+        for table_name in self.tables:
+            table_result = self.results["tables"][table_name]
+            table_mapping = table_result["mapping"]
+            
+            print(f"\n{'─'*70}")
+            print(f"  Checking: {table_name}")
+            print(f"{'─'*70}")
+            
+            # Check replication
+            replication_result = self.check_replication(table_mapping)
+            table_result["replication"] = replication_result
+            
+            # Verify row counts
+            row_counts = self.get_row_counts(table_mapping)
+            table_result["row_counts"] = row_counts
+            
+            # Determine status
+            if replication_result["success"] and row_counts["match"]:
+                table_result["status"] = "success"
+                self.results["summary"]["successful"] += 1
+                print(f"\n✅ Test PASSED for {table_name}")
+            elif replication_result["success"]:
+                table_result["status"] = "warning"
+                self.results["summary"]["warnings"] += 1
+                print(f"\n⚠️  Test COMPLETED WITH WARNINGS for {table_name}")
+            else:
+                table_result["status"] = "failed"
+                self.results["summary"]["failed"] += 1
+                print(f"\n❌ Test FAILED for {table_name}")
         
         # Print summary
         self.print_summary()
@@ -551,20 +625,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Test all three default tables
+  # Test all three default tables (batch mode)
   python test_monitor.py
   
   # Test specific tables
   python test_monitor.py --tables CUSTOMERS,CUSTOMERS2
   
-  # Generate more rows and wait longer
-  python test_monitor.py --rows 20 --wait 180
+  # Generate 20 transactions per table, wait 60s
+  python test_monitor.py --transactions 20
+  
+  # Quick test with fewer rows
+  python test_monitor.py --rows 5 --wait 30
   
   # Save JSON report
   python test_monitor.py --format json --output report.json
-  
-  # Quick test (less wait time)
-  python test_monitor.py --wait 60
         """
     )
     
@@ -578,13 +652,19 @@ Examples:
         "--rows",
         type=int,
         default=10,
-        help="Number of mockup rows per table (default: 10)"
+        help="Number of mockup rows/transactions per table (default: 10)"
+    )
+    parser.add_argument(
+        "--transactions",
+        type=int,
+        default=None,
+        help="Number of transactions per table (alias for --rows)"
     )
     parser.add_argument(
         "--wait",
         type=int,
-        default=120,
-        help="Seconds to wait for CDC replication (default: 120)"
+        default=60,
+        help="Seconds to wait for CDC replication (default: 60, combined for all tables)"
     )
     parser.add_argument(
         "--format",
@@ -626,10 +706,13 @@ Examples:
         print("❌ Error: No tables specified")
         sys.exit(1)
     
+    # Use --transactions if provided, otherwise use --rows
+    rows_per_table = args.transactions if args.transactions is not None else args.rows
+    
     # Create and run monitor
     monitor = TestMonitor(
         tables=tables,
-        rows_per_table=args.rows,
+        rows_per_table=rows_per_table,
         output_format=args.format,
         output_file=args.output,
         wait_seconds=args.wait,

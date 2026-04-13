@@ -1,12 +1,12 @@
 #!/bin/bash
 #
 # Test Monitor - Quick wrapper script
-# Generate mockup data and verify replication
+# Generate mockup data and verify replication (batch mode)
 #
 # Usage:
 #   ./test_monitor.sh
 #   ./test_monitor.sh --tables CUSTOMERS,CUSTOMERS2
-#   ./test_monitor.sh --rows 20 --wait 180
+#   ./test_monitor.sh --transactions 20 --wait 60
 #
 
 set -e
