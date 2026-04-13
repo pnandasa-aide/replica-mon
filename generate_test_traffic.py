@@ -36,29 +36,41 @@ def run_qadmcli(args, timeout=30):
         # Skip log lines and find JSON
         lines = output.split('\n')
         json_lines = []
+        in_json = False
+        
         for line in lines:
-            line = line.strip()
-            # Skip log lines (contain timestamps or INFO/WARNING/ERROR)
-            if line.startswith('[') or line.startswith('INFO') or line.startswith('WARNING') or line.startswith('ERROR'):
+            stripped = line.strip()
+            
+            # Skip empty lines
+            if not stripped:
                 continue
+            
+            # Skip ANSI-colored log lines (contain INFO, WARNING, ERROR with timestamps)
+            if 'INFO' in stripped or 'WARNING' in stripped or 'ERROR' in stripped:
+                continue
+            
             # Skip emoji lines
-            if line.startswith('📦') or line.startswith('🚀'):
+            if stripped.startswith('📦') or stripped.startswith('🚀'):
                 continue
-            json_lines.append(line)
+            
+            # Check if this looks like JSON
+            if stripped.startswith('[') or stripped.startswith('{') or in_json:
+                in_json = True
+                json_lines.append(stripped)
+                
+                # Check if JSON has ended by counting brackets across all lines
+                full_json = '\n'.join(json_lines)
+                if full_json.count('[') == full_json.count(']') and full_json.count('{') == full_json.count('}'):
+                    if full_json.count('[') > 0 or full_json.count('{') > 0:
+                        break
         
         json_str = '\n'.join(json_lines).strip()
         
         if not json_str:
             return None
         
-        # Try to parse as JSON array or object
-        if json_str.startswith('['):
-            return json.loads(json_str)
-        elif json_str.startswith('{'):
-            return json.loads(json_str)
-        else:
-            # Not JSON, return raw output
-            return output
+        # Try to parse as JSON
+        return json.loads(json_str)
             
     except json.JSONDecodeError as e:
         # JSON parsing failed - return None
