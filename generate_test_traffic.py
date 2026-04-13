@@ -32,19 +32,40 @@ def run_qadmcli(args, timeout=30):
     # Parse JSON output
     try:
         output = result.stdout.strip()
-        # Find JSON in output (skip log messages)
-        start_idx = output.find('[')  # JSON arrays start with [
-        if start_idx < 0:
-            start_idx = output.find('{')  # Or objects start with {
         
-        if start_idx >= 0:
-            json_str = output[start_idx:]
+        # Skip log lines and find JSON
+        lines = output.split('\n')
+        json_lines = []
+        for line in lines:
+            line = line.strip()
+            # Skip log lines (contain timestamps or INFO/WARNING/ERROR)
+            if line.startswith('[') or line.startswith('INFO') or line.startswith('WARNING') or line.startswith('ERROR'):
+                continue
+            # Skip emoji lines
+            if line.startswith('📦') or line.startswith('🚀'):
+                continue
+            json_lines.append(line)
+        
+        json_str = '\n'.join(json_lines).strip()
+        
+        if not json_str:
+            return None
+        
+        # Try to parse as JSON array or object
+        if json_str.startswith('['):
             return json.loads(json_str)
+        elif json_str.startswith('{'):
+            return json.loads(json_str)
+        else:
+            # Not JSON, return raw output
+            return output
+            
+    except json.JSONDecodeError as e:
+        # JSON parsing failed - return None
+        return None
     except Exception as e:
-        print(f"  ⚠️  JSON parse error: {e}")
-        pass
-    
-    return result.stdout
+        print(f"  ⚠️  Unexpected error: {e}")
+        return None
 
 def generate_traffic(library, table, count=10, insert_ratio=50, update_ratio=30, delete_ratio=20):
     """Generate test traffic using qadmcli mockup."""
@@ -115,6 +136,32 @@ def run_monitor_check():
         print(f"Error: {result.stderr[:500]}")
 
 def main():
+    # Handle --help flag
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("="*80)
+        print("REPLICA-MON TRAFFIC GENERATOR")
+        print("="*80)
+        print()
+        print("Usage:")
+        print("  python3 generate_test_traffic.py [operation] [count]")
+        print()
+        print("Operations:")
+        print("  all      Generate mixed operations (50% insert, 30% update, 20% delete)")
+        print("  insert   Generate INSERT operations only")
+        print("  update   Generate UPDATE operations only")
+        print("  delete   Generate DELETE operations only")
+        print()
+        print("Examples:")
+        print("  python3 generate_test_traffic.py              # 10 transactions, mixed")
+        print("  python3 generate_test_traffic.py all 50       # 50 transactions, mixed")
+        print("  python3 generate_test_traffic.py insert 20    # 20 inserts only")
+        print("  python3 generate_test_traffic.py update 10    # 10 updates only")
+        print()
+        print("This script uses qadmcli mockup to generate realistic test data")
+        print("with automatic schema detection and intelligent field patterns.")
+        print()
+        return
+    
     print("="*80)
     print("REPLICA-MON TRAFFIC GENERATOR (using qadmcli mockup)")
     print("="*80)
