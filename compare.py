@@ -26,6 +26,7 @@ from lib.timezone import (
     get_timezone_info,
     format_timezone_report
 )
+from lib.journal_cache import JournalCache
 
 
 def detect_qadmcli_path() -> str:
@@ -47,7 +48,8 @@ def generate_report(
     target_table: str,
     since: str = None,
     output_format: str = "text",
-    show_timezone: bool = True
+    show_timezone: bool = True,
+    use_cache: bool = True
 ):
     """
     Generate replication comparison report.
@@ -101,10 +103,12 @@ def generate_report(
     
     # 1. Get AS400 journal summary (using normalized timestamp)
     print("[1/3] Querying AS400 journal...")
-    journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path)
+    journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
     try:
         journal_summary = journal_reader.get_summary(source_table, since_for_as400)
         print(f"  ✓ Retrieved {journal_summary.get('total', 0)} journal entries")
+        if journal_summary.get('from_cache'):
+            print(f"  ℹ️  Data served from cache")
     except Exception as e:
         print(f"  ✗ Error: {e}")
         return
@@ -256,6 +260,9 @@ Examples:
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     parser.add_argument("--no-timezone", action="store_true", help="Hide timezone information")
     parser.add_argument("--timezone-only", action="store_true", help="Only show timezone info and exit")
+    parser.add_argument("--no-cache", action="store_true", help="Disable journal caching")
+    parser.add_argument("--cache-info", action="store_true", help="Show cache information and exit")
+    parser.add_argument("--clear-cache", action="store_true", help="Clear journal cache and exit")
     
     args = parser.parse_args()
     
@@ -269,14 +276,59 @@ Examples:
         print(format_timezone_report(tz_info))
         sys.exit(0)
     
+    # Special case: show cache info
+    if args.cache_info:
+        cache = JournalCache()
+        if args.source:
+            # Show info for specific table
+            info = cache.get_cache_info(args.source)
+            print("=" * 70)
+            print(f"CACHE INFORMATION: {args.source}")
+            print("=" * 70)
+            print(f"  Cached: {info['cached']}")
+            print(f"  Entry Count: {info['entry_count']}")
+            print(f"  Last Timestamp: {info['last_timestamp'] or 'N/A'}")
+            print(f"  Last Sequence: {info['last_sequence']}")
+            print(f"  Cached At: {info['cached_at'] or 'N/A'}")
+            print(f"  Cache Size: {info['cache_size_mb']} MB")
+        else:
+            # Show all cached tables
+            print("=" * 70)
+            print("CACHE INFORMATION (All Tables)")
+            print("=" * 70)
+            cache_files = list(cache.cache_dir.glob("*.meta.json"))
+            if not cache_files:
+                print("  No cached data found.")
+            else:
+                for meta_file in sorted(cache_files):
+                    table_name = meta_file.stem.replace('_meta', '').replace('_', '.')
+                    info = cache.get_cache_info(table_name)
+                    print(f"\n  Table: {table_name}")
+                    print(f"    Entries: {info['entry_count']}")
+                    print(f"    Last Update: {info['cached_at'] or 'N/A'}")
+                    print(f"    Size: {info['cache_size_mb']} MB")
+        sys.exit(0)
+    
+    # Special case: clear cache
+    if args.clear_cache:
+        cache = JournalCache()
+        if args.source:
+            cache.clear_cache(args.source)
+            print(f"✓ Cache cleared for {args.source}")
+        else:
+            cache.clear_cache()
+            print("✓ All caches cleared")
+        sys.exit(0)
+    
     # Validate required arguments for comparison
     if not args.source or not args.target:
-        parser.error("--source and --target are required for comparison (or use --timezone-only)")
+        parser.error("--source and --target are required for comparison (or use --timezone-only, --cache-info, --clear-cache)")
     
     generate_report(
         source_table=args.source,
         target_table=args.target,
         since=args.since,
         output_format=args.format,
-        show_timezone=not args.no_timezone
+        show_timezone=not args.no_timezone,
+        use_cache=not args.no_cache
     )
