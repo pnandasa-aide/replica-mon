@@ -370,7 +370,7 @@ def get_entity_comparison(
         # Compare
         if result["ct_total"] >= 0:
             comparator = ChangeComparator()
-            comparison = comparator.compare_summaries(journal_summary, ct_summary)
+            comparison = comparator.compare(journal_summary, ct_summary)
             
             result["match"] = comparison.get('match', False)
             result["discrepancies"] = comparison.get('discrepancies', [])
