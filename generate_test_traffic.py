@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """
 Test traffic generator for replica-mon testing.
-Generates INSERT, UPDATE, DELETE operations on AS400 tables.
+Uses qadmcli mockup to generate realistic test data.
 """
 
 import subprocess
 import json
 import time
 import sys
-import random
 from datetime import datetime
 
 # Configuration
 QADMCLI_PATH = "../qadmcli/qadmcli.sh"
-CONFIG_FILE = "config.json"
 
 TABLES = [
-    {"library": "GSLIBTST", "table": "ORDERS", "pk_column": "ORDER_ID"},
-    {"library": "GSLIBTST", "table": "CUSTOMERS", "pk_column": "CUST_ID"},
-    {"library": "GSLIBTST", "table": "CUSTOMERS2", "pk_column": "CUST_ID"},
+    {"library": "GSLIBTST", "table": "ORDERS"},
+    {"library": "GSLIBTST", "table": "CUSTOMERS"},
+    {"library": "GSLIBTST", "table": "CUSTOMERS2"},
 ]
 
 def run_qadmcli(args, timeout=30):
@@ -48,143 +46,38 @@ def run_qadmcli(args, timeout=30):
     
     return result.stdout
 
-def generate_inserts(library, table, pk_column, count=10):
-    """Generate INSERT operations."""
-    print(f"\n  📝 Inserting {count} records into {library}.{table}...")
+def generate_traffic(library, table, count=10, insert_ratio=50, update_ratio=30, delete_ratio=20):
+    """Generate test traffic using qadmcli mockup."""
+    print(f"\n  📝 Generating {count} transactions for {library}.{table}...")
+    print(f"     Ratios: {insert_ratio}% insert, {update_ratio}% update, {delete_ratio}% delete")
     
-    for i in range(count):
-        # Generate unique PK
-        pk_value = int(time.time() * 1000) + i
+    cmd = [
+        QADMCLI_PATH,
+        "mockup", "generate",
+        "-t", table,
+        "-l", library,
+        "-r", str(count),
+        "--insert-ratio", str(insert_ratio),
+        "--update-ratio", str(update_ratio),
+        "--delete-ratio", str(delete_ratio)
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    
+    if result.returncode == 0:
+        # Parse summary from output
+        output = result.stdout
         
-        # Build INSERT statement based on table
-        if table == "ORDERS":
-            sql = f"""
-                INSERT INTO {library}.{table} 
-                ({pk_column}, ORDER_DATE, CUSTOMER_ID, AMOUNT, STATUS)
-                VALUES ({pk_value}, CURRENT_TIMESTAMP, {random.randint(1000, 9999)}, {random.randint(100, 9999)}, 'ACTIVE')
-            """
-        elif table == "CUSTOMERS" or table == "CUSTOMERS2":
-            sql = f"""
-                INSERT INTO {library}.{table} 
-                ({pk_column}, NAME, EMAIL, CREATED_DATE)
-                VALUES ({pk_value}, 'TestUser{pk_value}', 'test{pk_value}@example.com', CURRENT_TIMESTAMP)
-            """
-        else:
-            print(f"  ⚠️  Unknown table schema: {table}")
-            return 0
+        # Look for summary lines
+        for line in output.split('\n'):
+            if any(keyword in line for keyword in ['INSERT', 'UPDATE', 'DELETE', 'Total', 'transactions']):
+                print(f"     {line.strip()}")
         
-        # Execute via qadmcli
-        result = run_qadmcli([
-            "sql", "execute",
-            "-q", sql.strip()
-        ])
-        
-        if result:
-            print(f"    ✓ Inserted record {pk_value}")
-        else:
-            print(f"    ✗ Failed to insert record {pk_value}")
-            return i  # Return count of successful inserts
-        
-        time.sleep(0.1)  # Small delay between inserts
-    
-    return count
-
-def generate_updates(library, table, pk_column, count=5):
-    """Generate UPDATE operations."""
-    print(f"\n  ✏️  Updating {count} records in {library}.{table}...")
-    
-    # First, get some existing records to update
-    select_sql = f"""
-        SELECT {pk_column} 
-        FROM {library}.{table} 
-        ORDER BY {pk_column} DESC 
-        FETCH FIRST {count} ROWS ONLY
-    """
-    
-    result = run_qadmcli([
-        "sql", "execute",
-        "-q", select_sql.strip(),
-        "--format", "json"
-    ])
-    
-    if not result or not isinstance(result, list) or len(result) == 0:
-        print(f"  ⚠️  No records found to update")
-        return 0
-    
-    pks = [row[pk_column] for row in result]
-    
-    updated = 0
-    for pk in pks:
-        if table == "ORDERS":
-            sql = f"""
-                UPDATE {library}.{table} 
-                SET AMOUNT = {random.randint(100, 9999)}, STATUS = 'UPDATED'
-                WHERE {pk_column} = {pk}
-            """
-        else:  # CUSTOMERS or CUSTOMERS2
-            sql = f"""
-                UPDATE {library}.{table} 
-                SET NAME = 'Updated{pk}', EMAIL = 'updated{pk}@example.com'
-                WHERE {pk_column} = {pk}
-            """
-        
-        result = run_qadmcli([
-            "sql", "execute",
-            "-q", sql.strip()
-        ])
-        
-        if result:
-            print(f"    ✓ Updated record {pk}")
-            updated += 1
-        else:
-            print(f"    ✗ Failed to update record {pk}")
-        
-        time.sleep(0.1)
-    
-    return updated
-
-def generate_deletes(library, table, pk_column, count=3):
-    """Generate DELETE operations."""
-    print(f"\n  🗑️  Deleting {count} records from {library}.{table}...")
-    
-    # Get oldest records to delete
-    select_sql = f"""
-        SELECT {pk_column} 
-        FROM {library}.{table} 
-        ORDER BY {pk_column} ASC 
-        FETCH FIRST {count} ROWS ONLY
-    """
-    
-    result = run_qadmcli([
-        "sql", "execute",
-        "-q", select_sql.strip(),
-        "--format", "json"
-    ])
-    
-    if not result or not isinstance(result, list) or len(result) == 0:
-        print(f"  ⚠️  No records found to delete")
-        return 0
-    
-    pks = [row[pk_column] for row in result]
-    
-    deleted = 0
-    for pk in pks:
-        sql = f"DELETE FROM {library}.{table} WHERE {pk_column} = {pk}"
-        
-        result = run_qadmcli([
-            "sql", "execute",
-            "-q", sql.strip()
-        ])
-        
-        if result:
-            print(f"    ✓ Deleted record {pk}")
-            deleted += 1
-        else:
-            print(f"    ✗ Failed to delete record {pk}")
-        
-        time.sleep(0.1)
-    
-    return deleted
+        return True
+    else:
+        print(f"  ⚠️  Failed to generate traffic")
+        print(f"     Error: {result.stderr[:200] if result.stderr else result.stdout[:200]}")
+        return False
 
 def get_row_count(library, table):
     """Get current row count for a table."""
@@ -223,7 +116,7 @@ def run_monitor_check():
 
 def main():
     print("="*80)
-    print("REPLICA-MON TRAFFIC GENERATOR")
+    print("REPLICA-MON TRAFFIC GENERATOR (using qadmcli mockup)")
     print("="*80)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
@@ -238,53 +131,62 @@ def main():
     if len(sys.argv) > 2:
         count = int(sys.argv[2])
     
-    # Generate traffic for each table
-    total_inserts = 0
-    total_updates = 0
-    total_deletes = 0
+    # Set operation ratios based on mode
+    if operation == "insert":
+        insert_ratio, update_ratio, delete_ratio = 100, 0, 0
+    elif operation == "update":
+        insert_ratio, update_ratio, delete_ratio = 0, 100, 0
+    elif operation == "delete":
+        insert_ratio, update_ratio, delete_ratio = 0, 0, 100
+    elif operation == "all":
+        insert_ratio, update_ratio, delete_ratio = 50, 30, 20
+    else:
+        print(f"⚠️  Unknown operation: {operation}")
+        print("Use: insert, update, delete, or all")
+        sys.exit(1)
     
-    for table_info in TABLES:
+    # Generate traffic for each table
+    total_tables = len(TABLES)
+    successful_tables = 0
+    
+    for i, table_info in enumerate(TABLES, 1):
         library = table_info["library"]
         table = table_info["table"]
-        pk_column = table_info["pk_column"]
         
         print(f"\n{'='*80}")
-        print(f"📋 Table: {library}.{table}")
+        print(f"📋 Table {i}/{total_tables}: {library}.{table}")
         print(f"{'='*80}")
         
         # Show initial count
         initial_count = get_row_count(library, table)
         print(f"Initial row count: {initial_count}")
         
-        if operation in ["insert", "all"]:
-            inserts = generate_inserts(library, table, pk_column, count)
-            total_inserts += inserts
+        # Generate traffic
+        success = generate_traffic(
+            library, table, count,
+            insert_ratio, update_ratio, delete_ratio
+        )
         
-        if operation in ["update", "all"]:
-            updates = generate_updates(library, table, pk_column, min(count // 2, 5))
-            total_updates += updates
-        
-        if operation in ["delete", "all"]:
-            deletes = generate_deletes(library, table, pk_column, min(count // 3, 3))
-            total_deletes += deletes
+        if success:
+            successful_tables += 1
         
         # Show final count
         final_count = get_row_count(library, table)
         print(f"\nFinal row count: {final_count}")
-        print(f"Net change: {final_count - initial_count if final_count and initial_count else 'unknown'}")
+        if final_count is not None and initial_count is not None:
+            print(f"Net change: {final_count - initial_count:+d} rows")
     
     # Summary
     print(f"\n{'='*80}")
     print("📊 TRAFFIC GENERATION SUMMARY")
     print(f"{'='*80}")
-    print(f"Total Inserts:  {total_inserts}")
-    print(f"Total Updates:  {total_updates}")
-    print(f"Total Deletes:  {total_deletes}")
-    print(f"Total Changes:  {total_inserts + total_updates + total_deletes}")
+    print(f"Tables processed: {successful_tables}/{total_tables}")
+    print(f"Transactions per table: {count}")
+    print(f"Operation mix: {insert_ratio}% insert, {update_ratio}% update, {delete_ratio}% delete")
     print(f"{'='*80}\n")
     
-    # Wait for replication
-    if total_inserts + total_updates + total_deletes > 0:
+    # Wait for replication and run monitor
+    if successful_tables > 0:
         wait_time = 30
         print(f"⏳ Waiting {wait_time} seconds for GlueSync to replicate changes...")
         time.sleep(wait_time)
