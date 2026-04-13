@@ -52,18 +52,22 @@ def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_pat
         parts = source_table.split('.')
         if len(parts) == 2:
             library, table = parts
-            cmd = [qadmcli_path, "journal", "info", "-n", table, "-l", library, "--format", "json"]
+            # journal info doesn't support --format json, parse table output
+            cmd = [qadmcli_path, "journal", "info", "-n", table, "-l", library]
             proc_result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             
             if proc_result.returncode == 0:
+                # Check if output contains "Journaled: Yes" (handle ANSI codes and spacing)
+                output = proc_result.stdout
+                # Remove ANSI escape codes
                 import re
-                match = re.search(r'\{[^{}]+\}', proc_result.stdout, re.DOTALL)
-                if match:
-                    info = json.loads(match.group())
-                    if info.get('Journaled') == 'Yes':
-                        result['journal_enabled'] = True
-                    else:
-                        result['issues'].append(f"AS400 table {source_table} is not journaled")
+                clean_output = re.sub(r'\x1b\[[0-9;]*m', '', output)
+                
+                # Match patterns like "Journaled: Yes" with any spacing
+                if re.search(r'Journaled:\s+Yes', clean_output):
+                    result['journal_enabled'] = True
+                else:
+                    result['issues'].append(f"AS400 table {source_table} is not journaled")
             else:
                 result['issues'].append(f"Could not check journal status for {source_table}")
     except Exception as e:
