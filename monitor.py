@@ -52,22 +52,33 @@ def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_pat
         parts = source_table.split('.')
         if len(parts) == 2:
             library, table = parts
-            # journal info doesn't support --format json, parse table output
+            # Use --format json for clean parsing
             cmd = [qadmcli_path, "journal", "info", "-t", table, "-l", library, "--format", "json"]
             proc_result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             
             if proc_result.returncode == 0:
-                # Check if output contains "Journaled: Yes" (handle ANSI codes and spacing)
-                output = proc_result.stdout
-                # Remove ANSI escape codes
+                import json
                 import re
-                clean_output = re.sub(r'\x1b\[[0-9;]*m', '', output)
                 
-                # Match patterns like "Journaled: Yes" with any spacing
-                if re.search(r'Journaled:\s+Yes', clean_output):
-                    result['journal_enabled'] = True
+                # Parse JSON output
+                output = proc_result.stdout
+                # Strip ANSI escape codes
+                ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+                clean_output = ansi_escape.sub('', output)
+                
+                # Find and parse JSON
+                start_idx = clean_output.find('{')
+                if start_idx >= 0:
+                    json_str = clean_output[start_idx:]
+                    data = json.loads(json_str)
+                    
+                    # Check is_journaled field
+                    if data.get('is_journaled', False):
+                        result['journal_enabled'] = True
+                    else:
+                        result['issues'].append(f"AS400 table {source_table} is not journaled")
                 else:
-                    result['issues'].append(f"AS400 table {source_table} is not journaled")
+                    result['issues'].append(f"Failed to parse journal info for {source_table}")
             else:
                 result['issues'].append(f"Could not check journal status for {source_table}")
     except Exception as e:
