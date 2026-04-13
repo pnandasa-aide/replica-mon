@@ -190,7 +190,8 @@ def get_entity_comparison(
     target_table: str,
     since: str = None,
     use_cache: bool = True,
-    qadmcli_path: str = "../qadmcli/qadmcli.sh"
+    qadmcli_path: str = "../qadmcli/qadmcli.sh",
+    verbose: bool = False
 ) -> Dict:
     """
     Run comparison for a single entity.
@@ -211,13 +212,23 @@ def get_entity_comparison(
     
     try:
         # Get cache info
+        if verbose:
+            print(f"    → Checking cache status...")
         cache = JournalCache()
         cache_info = cache.get_cache_info(source_table)
         result["cache_status"] = cache_info.get('cache_level', 'none')
         result["requires_attention"] = cache_info.get('requires_attention', False)
         result["cached_at"] = cache_info.get('cached_at')
         
+        if verbose:
+            if cache_info.get('cached'):
+                print(f"    → Cache found: {cache_info.get('entry_count', 0)} entries, last updated: {cache_info.get('cached_at')}")
+            else:
+                print(f"    → No cache found, will query AS400")
+        
         # Detect timezones
+        if verbose:
+            print(f"    → Detecting timezones...")
         tz_info = get_timezone_info(qadmcli_path)
         as400_tz = tz_info['as400']['utc_offset']
         mssql_tz = tz_info['mssql']['utc_offset']
@@ -226,6 +237,8 @@ def get_entity_comparison(
         since_for_as400 = normalize_to_as400_time(since, mssql_tz, as400_tz) if since else None
         
         # Get AS400 journal summary
+        if verbose:
+            print(f"    → Querying AS400 journal (this may take 60-120s for first run)...")
         journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
         journal_summary = journal_reader.get_summary(source_table, since_for_as400)
         
@@ -234,7 +247,16 @@ def get_entity_comparison(
         result["journal_updates"] = journal_summary.get('updates', 0)
         result["journal_deletes"] = journal_summary.get('deletes', 0)
         
+        if verbose:
+            from_cache = journal_summary.get('from_cache', False)
+            if from_cache:
+                print(f"    → ✓ AS400 journal: {result['journal_total']} entries (from cache)")
+            else:
+                print(f"    → ✓ AS400 journal: {result['journal_total']} entries (queried from AS400)")
+        
         # Get MSSQL CT summary
+        if verbose:
+            print(f"    → Querying MSSQL Change Tracking...")
         ct_reader = MSSQLCTReader(qadmcli_path=qadmcli_path)
         
         if ct_reader.is_ct_enabled(target_table):
@@ -243,9 +265,14 @@ def get_entity_comparison(
             result["ct_inserts"] = ct_summary.get('inserts', 0)
             result["ct_updates"] = ct_summary.get('updates', 0)
             result["ct_deletes"] = ct_summary.get('deletes', 0)
+            
+            if verbose:
+                print(f"    → ✓ MSSQL CT: {result['ct_total']} entries")
         else:
             result["ct_enabled"] = False
             result["ct_total"] = -1  # Indicates not available
+            if verbose:
+                print(f"    → ⚠️  CT not enabled on {target_table}")
         
         # Compare
         if result["ct_total"] >= 0:
@@ -332,6 +359,7 @@ def run_monitoring_cycle(
     output_format: str = "table",
     use_cache: bool = True,
     show_cache: bool = True,
+    verbose: bool = False,
     qadmcli_path: str = "../qadmcli/qadmcli.sh"
 ) -> List[Dict]:
     """
@@ -362,7 +390,8 @@ def run_monitoring_cycle(
             target_table=target,
             since=since,
             use_cache=use_cache,
-            qadmcli_path=qadmcli_path
+            qadmcli_path=qadmcli_path,
+            verbose=verbose
         )
         
         results.append(result)
@@ -386,6 +415,7 @@ def run_continuous_monitoring(
     output_format: str = "table",
     use_cache: bool = True,
     show_cache: bool = True,
+    verbose: bool = False,
     qadmcli_path: str = "../qadmcli/qadmcli.sh"
 ):
     """
@@ -429,6 +459,7 @@ def run_continuous_monitoring(
                 output_format=output_format,
                 use_cache=use_cache,
                 show_cache=show_cache,
+                verbose=verbose,
                 qadmcli_path=qadmcli_path
             )
             
@@ -480,6 +511,7 @@ Examples:
     parser.add_argument("--no-cache", action="store_true", help="Disable caching")
     parser.add_argument("--no-cache-status", action="store_true", help="Hide cache status in table")
     parser.add_argument("--no-auto-discover", action="store_true", help="Disable auto-discovery from GlueSync CLI (use entities.json only)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed progress logging")
     
     args = parser.parse_args()
     
@@ -497,7 +529,8 @@ Examples:
             since=args.since,
             output_format=args.format,
             use_cache=not args.no_cache,
-            show_cache=not args.no_cache_status
+            show_cache=not args.no_cache_status,
+            verbose=args.verbose
         )
     else:
         results = run_monitoring_cycle(
@@ -505,5 +538,6 @@ Examples:
             since=args.since,
             output_format=args.format,
             use_cache=not args.no_cache,
-            show_cache=not args.no_cache_status
+            show_cache=not args.no_cache_status,
+            verbose=args.verbose
         )
