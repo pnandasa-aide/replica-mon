@@ -276,7 +276,7 @@ class TestMonitor:
         print(f"  Row Count Verification")
         print(f"{'─'*70}")
         
-        # AS400 count
+        # AS400 count - use subprocess with better parsing
         cmd_source = [
             self.qadmcli_path,
             "sql", "execute",
@@ -286,12 +286,26 @@ class TestMonitor:
         result_source = self.run_command(cmd_source, "Counting AS400 rows")
         source_count = 0
         if result_source["success"]:
-            for line in result_source["stdout"].split('\n'):
-                if line.strip().isdigit():
-                    source_count = int(line.strip())
-                    break
+            # Parse AS400 output - find the line after the dashes
+            # Output format:
+            # Query
+            # Results
+            #  CNT  
+            # -----
+            #  66  
+            output = result_source["stdout"]
+            lines = output.split('\n')
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                # Look for separator line (-----)
+                if stripped.startswith('-----') and i + 1 < len(lines):
+                    # Next line should be the value
+                    value_line = lines[i + 1].strip()
+                    if value_line.isdigit():
+                        source_count = int(value_line)
+                        break
         
-        # MSSQL count
+        # MSSQL count - use subprocess with better JSON extraction
         target_parts = table_mapping['target'].split('.')
         cmd_target = [
             self.qadmcli_path,
@@ -304,11 +318,16 @@ class TestMonitor:
         target_count = 0
         if result_target["success"]:
             try:
-                data = json.loads(result_target["stdout"])
-                if data.get("rows"):
-                    target_count = int(data["rows"][0].get("CNT", 0))
-            except:
-                pass
+                # Extract JSON from output (may have Rich formatting mixed in)
+                import re
+                output = result_target["stdout"]
+                
+                # Find JSON array pattern: [\n  {\n    "CNT": 66\n  }\n]
+                match = re.search(r'\[\s*\{\s*"CNT"\s*:\s*(\d+)\s*\}\s*\]', output, re.DOTALL)
+                if match:
+                    target_count = int(match.group(1))
+            except Exception as e:
+                print(f"  ⚠️  Warning: Could not parse MSSQL count: {e}")
         
         print(f"\n  {'Table':<25} {'Count':>10}")
         print(f"  {'─'*40}")
