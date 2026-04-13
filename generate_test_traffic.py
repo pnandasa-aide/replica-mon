@@ -28,17 +28,22 @@ def run_qadmcli(args, timeout=30):
     
     if result.returncode != 0:
         print(f"  ⚠️  Command failed: {' '.join(cmd)}")
-        print(f"  Error: {result.stderr[:200]}")
+        print(f"  Error: {result.stderr[:200] if result.stderr else result.stdout[:200]}")
         return None
     
     # Parse JSON output
     try:
         output = result.stdout.strip()
-        # Find JSON in output
-        start_idx = output.find('{')
+        # Find JSON in output (skip log messages)
+        start_idx = output.find('[')  # JSON arrays start with [
+        if start_idx < 0:
+            start_idx = output.find('{')  # Or objects start with {
+        
         if start_idx >= 0:
-            return json.loads(output[start_idx:])
-    except:
+            json_str = output[start_idx:]
+            return json.loads(json_str)
+    except Exception as e:
+        print(f"  ⚠️  JSON parse error: {e}")
         pass
     
     return result.stdout
@@ -70,7 +75,7 @@ def generate_inserts(library, table, pk_column, count=10):
         
         # Execute via qadmcli
         result = run_qadmcli([
-            "as400", "execute",
+            "sql", "execute",
             "-q", sql.strip()
         ])
         
@@ -97,16 +102,16 @@ def generate_updates(library, table, pk_column, count=5):
     """
     
     result = run_qadmcli([
-        "as400", "execute",
+        "sql", "execute",
         "-q", select_sql.strip(),
         "--format", "json"
     ])
     
-    if not result or 'rows' not in result:
+    if not result or not isinstance(result, list) or len(result) == 0:
         print(f"  ⚠️  No records found to update")
         return 0
     
-    pks = [row[pk_column] for row in result['rows']]
+    pks = [row[pk_column] for row in result]
     
     updated = 0
     for pk in pks:
@@ -124,7 +129,7 @@ def generate_updates(library, table, pk_column, count=5):
             """
         
         result = run_qadmcli([
-            "as400", "execute",
+            "sql", "execute",
             "-q", sql.strip()
         ])
         
@@ -151,23 +156,23 @@ def generate_deletes(library, table, pk_column, count=3):
     """
     
     result = run_qadmcli([
-        "as400", "execute",
+        "sql", "execute",
         "-q", select_sql.strip(),
         "--format", "json"
     ])
     
-    if not result or 'rows' not in result:
+    if not result or not isinstance(result, list) or len(result) == 0:
         print(f"  ⚠️  No records found to delete")
         return 0
     
-    pks = [row[pk_column] for row in result['rows']]
+    pks = [row[pk_column] for row in result]
     
     deleted = 0
     for pk in pks:
         sql = f"DELETE FROM {library}.{table} WHERE {pk_column} = {pk}"
         
         result = run_qadmcli([
-            "as400", "execute",
+            "sql", "execute",
             "-q", sql.strip()
         ])
         
@@ -183,16 +188,16 @@ def generate_deletes(library, table, pk_column, count=3):
 
 def get_row_count(library, table):
     """Get current row count for a table."""
-    sql = f"SELECT COUNT(*) as CNT FROM {library}.{table}"
+    sql = f"SELECT COUNT(*) AS CNT FROM {library}.{table}"
     
     result = run_qadmcli([
-        "as400", "execute",
+        "sql", "execute",
         "-q", sql.strip(),
         "--format", "json"
     ])
     
-    if result and 'rows' in result and len(result['rows']) > 0:
-        return result['rows'][0]['CNT']
+    if result and isinstance(result, list) and len(result) > 0:
+        return result[0].get('CNT', 0)
     
     return None
 
