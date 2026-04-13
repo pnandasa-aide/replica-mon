@@ -76,95 +76,76 @@ class AS400JournalReader:
         except subprocess.CalledProcessError as e:
             return {'error': e.stderr or e.stdout, 'success': False}
     
-    def get_summary(self, table: str, since: Optional[str] = None) -> dict:
+    def get_summary(self, table: str, since: Optional[str] = None, use_time_window: bool = False) -> dict:
         """
-        Get journal summary for comparison with MSSQL CT (with caching).
+        Get journal summary with proper caching of individual entries.
         
         Args:
             table: Table name in format "LIBRARY.TABLE"
             since: Optional timestamp in format "YYYY-MM-DD HH:MM:SS"
+            use_time_window: If True, aggregate from cache by time window
             
         Returns:
-            Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'entries'
+            Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'from_cache'
         """
-        # Try cache first
-        if self.use_cache and self.cache:
+        # Try cache first for time-windowed queries
+        if self.use_cache and self.cache and use_time_window and since:
+            # Check if we can serve from cache
             cache_info = self.cache.get_cache_info(table)
             
-            if cache_info['cached']:
-                # Check if cache has summary data
-                if cache_info['entry_count'] == 0 and cache_info.get('cache_level') == 'summary':
-                    # Summary cache with no individual entries - this is expected
-                    # Check if we have summary metadata
-                    meta_path = self.cache._get_metadata_path(table)
-                    if meta_path.exists():
-                        try:
-                            import json
-                            with open(meta_path, 'r') as f:
-                                meta = json.load(f)
-                            
-                            # Check if summary data is recent (< 1 hour old)
-                            if 'summary_cached_at' in meta:
-                                from datetime import datetime
-                                cached_time = datetime.strptime(meta['summary_cached_at'], "%Y-%m-%d %H:%M:%S")
-                                age_minutes = (datetime.now() - cached_time).total_seconds() / 60
-                                
-                                if age_minutes < 60:  # Cache valid for 1 hour
-                                    print(f"  ℹ️  Using summary cache ({age_minutes:.0f}m old, {meta.get('summary_total', 0)} entries)")
-                                    return {
-                                        'table': table,
-                                        'total': meta.get('summary_total', 0),
-                                        'inserts': meta.get('summary_inserts', 0),
-                                        'updates': meta.get('summary_updates', 0),
-                                        'deletes': meta.get('summary_deletes', 0),
-                                        'from_cache': True
-                                    }
-                        except Exception as e:
-                            print(f"  ⚠️  Cache read error: {e}")
-                    
-                    # No valid summary metadata - re-fetch
-                    from datetime import datetime
-                    cached_time = datetime.strptime(cache_info['cached_at'], "%Y-%m-%d %H:%M:%S")
-                    age_hours = (datetime.now() - cached_time).total_seconds() / 3600
-                    print(f"  ℹ️  Summary cache expired ({age_hours:.1f}h ago), re-fetching from AS400...")
-                # Have valid cache - check if we need to update it
-                elif since and cache_info['last_timestamp']:
-                    # User wants data since specific time
-                    if since <= cache_info['last_timestamp']:
-                        # Requested time is within cache range - use cache!
-                        summary = self.cache.get_summary_from_cache(table, since)
-                        print(f"  ℹ️  Using cached data ({cache_info['entry_count']} entries)")
-                        return summary
-                    else:
-                        # Need newer data - fetch from AS400
-                        print(f"  ℹ️  Cache outdated, fetching from AS400...")
-                elif not since:
-                    # No time filter - use full cache
-                    summary = self.cache.get_summary_from_cache(table)
-                    print(f"  ℹ️  Using cached data ({cache_info['entry_count']} entries)")
+            if cache_info['cached'] and cache_info.get('cache_level') == 'full':
+                # Have full entry cache - aggregate by time window
+                summary = self._aggregate_from_cache(table, since)
+                if summary:
+                    print(f"  ℹ️  Using cached entries for time window (fast)")
                     return summary
         
-        # Fetch from AS400
+        # Fetch from AS400 (initial load or incremental update)
+        return self._fetch_from_as400(table, since)
+    
+    def _fetch_from_as400(self, table: str, since: Optional[str] = None) -> dict:
+        """
+        Fetch journal entries from AS400 and cache them.
+        Performs incremental fetch if metadata exists.
+        
+        Args:
+            table: Table name in format "LIBRARY.TABLE"
+            since: Optional timestamp filter
+            
+        Returns:
+            Summary dictionary with counts
+        """
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format LIBRARY.TABLE, got: {table}")
         
         library, table_name = parts
         
-        # Call qadmcli with summary format
+        # Check if we have cached data to resume from
+        last_sequence = 0
+        if self.use_cache and self.cache:
+            cache_info = self.cache.get_cache_info(table)
+            last_sequence = cache_info.get('last_sequence', 0)
+        
+        # Build command
         cmd_args = [
             "journal", "entries",
             "-t", table_name,
             "-l", library,
-            "--format", "summary"
+            "--format", "json"  # Get individual entries with timestamps!
         ]
         
-        if since:
+        # If we have cached data, fetch only new entries
+        if last_sequence > 0:
+            cmd_args.extend(["--from-sequence", str(last_sequence + 1)])
+            print(f"  ℹ️  Fetching new journal entries since sequence {last_sequence}...")
+        elif since:
             cmd_args.extend(["--from-time", since])
             print(f"  ℹ️  Fetching journal entries since {since}...")
         else:
-            print(f"  ℹ️  Fetching all journal entries (this may take a while)...")
+            print(f"  ℹ️  Fetching all journal entries (initial load, this may take a while)...")
         
+        # Execute command
         result = self._run_qadmcli(*cmd_args)
         
         if 'error' in result:
@@ -174,36 +155,129 @@ class AS400JournalReader:
                 'inserts': 0,
                 'updates': 0,
                 'deletes': 0,
-                'entries': [],
+                'from_cache': False,
                 'error': result.get('error', 'Unknown error')
             }
         
-        # Update cache with new data
-        if self.use_cache and self.cache and not since:
-            # Only cache full summary (not filtered)
+        # Parse entries
+        entries = result if isinstance(result, list) else result.get('entries', [])
+        
+        # Update cache with new entries
+        if self.use_cache and self.cache and entries:
             try:
-                # Save summary counts to cache metadata
-                # We don't store individual entries in summary mode
-                self.cache.save_cache(
+                # Append new entries to cache
+                new_count = self.cache.append_entries(
                     table,
-                    entries=[],  # Summary mode: no individual entries
-                    last_timestamp=result.get('newest_timestamp'),
-                    last_sequence=result.get('newest_sequence', 0),
-                    cache_level="summary",
-                    metadata={
-                        'summary_inserts': result.get('inserts', 0),
-                        'summary_updates': result.get('updates', 0),
-                        'summary_deletes': result.get('deletes', 0),
-                        'summary_total': result.get('total', 0),
-                        'summary_cached_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
+                    entries,
+                    last_timestamp=entries[-1].get('entry_timestamp'),
+                    last_sequence=entries[-1].get('entry_number', 0)
                 )
-                print(f"  ✓ Summary cache updated: {result.get('total', 0)} total entries")
+                
+                # Update metadata to mark as full cache
+                meta_path = self.cache._get_metadata_path(table)
+                if meta_path.exists():
+                    import json
+                    with open(meta_path, 'r') as f:
+                        metadata = json.load(f)
+                    metadata['cache_level'] = 'full'
+                    with open(meta_path, 'w') as f:
+                        json.dump(metadata, f, indent=2)
+                
+                print(f"  ✓ Cached {new_count} new entries (total: {len(entries)})")
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not update cache: {e}")
         
-        result['from_cache'] = False
-        return result
+        # Aggregate counts
+        summary = self._count_by_type(entries)
+        summary['table'] = table
+        summary['from_cache'] = False
+        
+        return summary
+    
+    def _aggregate_from_cache(self, table: str, since: str) -> Optional[dict]:
+        """
+        Aggregate journal entries from cache by time window.
+        
+        Args:
+            table: Table name
+            since: Start of time window "YYYY-MM-DD HH:MM:SS"
+            
+        Returns:
+            Summary dict or None if cache unavailable
+        """
+        if not self.cache:
+            return None
+        
+        try:
+            # Load cached entries
+            cache_data = self.cache.load_cache(table)
+            entries = cache_data.get('entries', [])
+            
+            if not entries:
+                return None
+            
+            # Filter entries by time window
+            window_entries = [
+                e for e in entries
+                if e.get('entry_timestamp', '') >= since
+            ]
+            
+            if not window_entries:
+                # No entries in this window
+                return {
+                    'table': table,
+                    'total': 0,
+                    'inserts': 0,
+                    'updates': 0,
+                    'deletes': 0,
+                    'from_cache': True
+                }
+            
+            # Aggregate by type
+            summary = self._count_by_type(window_entries)
+            summary['table'] = table
+            summary['from_cache'] = True
+            
+            return summary
+        except Exception as e:
+            print(f"  ⚠️  Cache aggregation error: {e}")
+            return None
+    
+    def _count_by_type(self, entries: list) -> dict:
+        """
+        Count journal entries by operation type.
+        
+        Args:
+            entries: List of journal entry dicts
+            
+        Returns:
+            Dict with total, inserts, updates, deletes
+        """
+        inserts = 0
+        updates = 0
+        deletes = 0
+        
+        for entry in entries:
+            entry_type = entry.get('entry_type', '')
+            
+            # AS400 journal entry types:
+            # PT = Add/Insert
+            # UP = Update before image
+            # UB = Update after image  
+            # DL = Delete
+            if entry_type == 'PT':
+                inserts += 1
+            elif entry_type in ('UP', 'UB'):
+                updates += 1
+            elif entry_type == 'DL':
+                deletes += 1
+        
+        return {
+            'total': len(entries),
+            'inserts': inserts,
+            'updates': updates,
+            'deletes': deletes
+        }
     
     def get_changes(self, table: str, since: Optional[str] = None, limit: int = 100) -> dict:
         """

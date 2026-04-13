@@ -265,7 +265,8 @@ def get_entity_comparison(
     since: str = None,
     use_cache: bool = True,
     qadmcli_path: str = "../qadmcli/qadmcli.sh",
-    verbose: bool = False
+    verbose: bool = False,
+    time_window_start: str = None  # NEW: Start of time window for delta counting
 ) -> Dict:
     """
     Run comparison for a single entity.
@@ -331,9 +332,28 @@ def get_entity_comparison(
         
         # Get AS400 journal summary
         if verbose:
-            print(f"    → Querying AS400 journal (this may take 60-120s for first run)...")
+            if time_window_start:
+                print(f"    → Querying AS400 journal (time window: {time_window_start} to now)...")
+            else:
+                print(f"    → Querying AS400 journal (this may take 60-120s for first run)...")
+        
         journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
-        journal_summary = journal_reader.get_summary(source_table, since_for_as400)
+        
+        # Use time-windowed aggregation if we have a window start
+        if time_window_start and use_cache:
+            # Aggregate from cache for this time window (FAST!)
+            journal_summary = journal_reader.get_summary(
+                source_table, 
+                since=time_window_start,
+                use_time_window=True  # Enable time-windowed aggregation
+            )
+        else:
+            # First run or no cache - fetch all entries
+            journal_summary = journal_reader.get_summary(
+                source_table, 
+                since=since_for_as400,
+                use_time_window=False
+            )
         
         result["journal_total"] = journal_summary.get('total', 0)
         result["journal_inserts"] = journal_summary.get('inserts', 0)
@@ -460,7 +480,8 @@ def run_monitoring_cycle(
     use_cache: bool = True,
     show_cache: bool = True,
     verbose: bool = False,
-    qadmcli_path: str = "../qadmcli/qadmcli.sh"
+    qadmcli_path: str = "../qadmcli/qadmcli.sh",
+    time_window_start: str = None  # NEW: Start of time window for aggregation
 ) -> List[Dict]:
     """
     Run one monitoring cycle for all entities.
@@ -491,7 +512,8 @@ def run_monitoring_cycle(
             since=since,
             use_cache=use_cache,
             qadmcli_path=qadmcli_path,
-            verbose=verbose
+            verbose=verbose,
+            time_window_start=time_window_start  # NEW: Pass time window
         )
         
         results.append(result)
@@ -541,16 +563,23 @@ def run_continuous_monitoring(
     print("\nPress Ctrl+C to stop\n")
     
     cycle_count = 0
+    last_cycle_time = None  # Track time window for aggregation
     
     try:
         while True:
             cycle_count += 1
+            cycle_start = datetime.now()
             
             # Print cycle header
             if output_format == "table":
                 print(f"\n{'='*120}")
-                print(f"🔄 MONITORING CYCLE #{cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"🔄 MONITORING CYCLE #{cycle_count} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"{'='*120}")
+            
+            # Calculate time window for this cycle
+            # First cycle: use --since parameter or beginning of time
+            # Subsequent cycles: use last cycle time (delta counting)
+            time_window_start = last_cycle_time
             
             # Run monitoring
             results = run_monitoring_cycle(
@@ -560,8 +589,12 @@ def run_continuous_monitoring(
                 use_cache=use_cache,
                 show_cache=show_cache,
                 verbose=verbose,
-                qadmcli_path=qadmcli_path
+                qadmcli_path=qadmcli_path,
+                time_window_start=time_window_start  # NEW: Pass time window
             )
+            
+            # Update last cycle time for next iteration
+            last_cycle_time = cycle_start.strftime("%Y-%m-%d %H:%M:%S")
             
             # Save metrics to file-based storage
             try:
