@@ -87,34 +87,57 @@ class JournalCache:
                 'cached_at': None
             }
     
-    def save_cache(self, table: str, entries: list, last_timestamp: str = None, last_sequence: int = 0):
+    def save_cache(self, table: str, entries: list, last_timestamp: str = None, last_sequence: int = 0,
+                   cache_level: str = "summary", metadata: dict = None):
         """
         Save journal entries to cache.
         
         Args:
             table: Table name in format "LIBRARY.TABLE"
-            entries: List of journal entry dictionaries
+            entries: List of journal entry dictionaries (empty for summary-only)
             last_timestamp: Latest entry timestamp
             last_sequence: Latest entry sequence number
+            cache_level: "summary" or "full"
+            metadata: Additional metadata (e.g., flags, tags)
         """
         cache_path = self._get_cache_path(table)
         meta_path = self._get_metadata_path(table)
         
-        # Save entries
+        # Save entries (can be empty for summary-only)
         with open(cache_path, 'w') as f:
             json.dump(entries, f, indent=2)
         
         # Save metadata
-        metadata = {
+        cache_metadata = {
             'table': table,
             'last_timestamp': last_timestamp,
             'last_sequence': last_sequence,
             'cached_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'entry_count': len(entries)
+            'entry_count': len(entries),
+            'cache_level': cache_level,
+            'requires_attention': False,
+            'discrepancy_detected_at': None,
+            'full_cache_reason': None
         }
         
+        # Merge with existing metadata (preserve flags)
+        if meta_path.exists():
+            try:
+                with open(meta_path, 'r') as f:
+                    existing_meta = json.load(f)
+                # Preserve important flags
+                cache_metadata['requires_attention'] = existing_meta.get('requires_attention', False)
+                cache_metadata['discrepancy_detected_at'] = existing_meta.get('discrepancy_detected_at')
+                cache_metadata['full_cache_reason'] = existing_meta.get('full_cache_reason')
+            except:
+                pass
+        
+        # Override with custom metadata if provided
+        if metadata:
+            cache_metadata.update(metadata)
+        
         with open(meta_path, 'w') as f:
-            json.dump(metadata, f, indent=2)
+            json.dump(cache_metadata, f, indent=2)
     
     def append_entries(self, table: str, new_entries: list, last_timestamp: str = None, last_sequence: int = 0):
         """
@@ -262,6 +285,15 @@ class JournalCache:
         if meta_path.exists():
             cache_size = meta_path.stat().st_size + self._get_cache_path(table).stat().st_size
         
+        # Load full metadata
+        metadata = {}
+        if meta_path.exists():
+            try:
+                with open(meta_path, 'r') as f:
+                    metadata = json.load(f)
+            except:
+                pass
+        
         return {
             'table': table,
             'cached': cache['cached_at'] is not None,
@@ -270,5 +302,96 @@ class JournalCache:
             'last_sequence': cache['last_sequence'],
             'cached_at': cache['cached_at'],
             'cache_size_bytes': cache_size,
-            'cache_size_mb': round(cache_size / 1024 / 1024, 2)
+            'cache_size_mb': round(cache_size / 1024 / 1024, 2),
+            'cache_level': metadata.get('cache_level', 'summary'),
+            'requires_attention': metadata.get('requires_attention', False),
+            'discrepancy_detected_at': metadata.get('discrepancy_detected_at'),
+            'full_cache_reason': metadata.get('full_cache_reason')
         }
+    
+    def mark_requires_attention(self, table: str, reason: str = "Discrepancy detected"):
+        """
+        Mark a table as requiring attention (upgrade to full cache).
+        
+        Args:
+            table: Table name in format "LIBRARY.TABLE"
+            reason: Reason for flagging
+        """
+        meta_path = self._get_metadata_path(table)
+        
+        if not meta_path.exists():
+            # Create minimal metadata if doesn't exist
+            self.save_cache(table, [], cache_level="summary")
+        
+        try:
+            with open(meta_path, 'r') as f:
+                metadata = json.load(f)
+            
+            metadata['requires_attention'] = True
+            metadata['discrepancy_detected_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            metadata['full_cache_reason'] = reason
+            
+            with open(meta_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            print(f"  ✓ Marked {table} as requiring attention")
+        except Exception as e:
+            print(f"  ⚠️  Warning: Could not update metadata: {e}")
+    
+    def reset_attention_flag(self, table: str, keep_full_cache: bool = False):
+        """
+        Reset attention flag for a table.
+        
+        Args:
+            table: Table name in format "LIBRARY.TABLE"
+            keep_full_cache: If False, downgrade to summary-only cache
+        """
+        meta_path = self._get_metadata_path(table)
+        
+        if not meta_path.exists():
+            print(f"  ⚠️  Warning: No cache found for {table}")
+            return
+        
+        try:
+            with open(meta_path, 'r') as f:
+                metadata = json.load(f)
+            
+            metadata['requires_attention'] = False
+            
+            if not keep_full_cache:
+                # Clear full entries, keep only summary
+                cache_path = self._get_cache_path(table)
+                with open(cache_path, 'w') as f:
+                    json.dump([], f)  # Empty entries
+                metadata['cache_level'] = 'summary'
+                metadata['full_cache_reason'] = None
+            
+            with open(meta_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            print(f"  ✓ Reset attention flag for {table}")
+            if not keep_full_cache:
+                print(f"  ℹ️  Downgraded to summary-only cache")
+        except Exception as e:
+            print(f"  ⚠️  Warning: Could not update metadata: {e}")
+    
+    def get_tables_requiring_attention(self) -> list:
+        """
+        Get list of tables flagged as requiring attention.
+        
+        Returns:
+            List of table names with attention flags
+        """
+        attention_tables = []
+        
+        for meta_file in self.cache_dir.glob("*.meta.json"):
+            try:
+                with open(meta_file, 'r') as f:
+                    metadata = json.load(f)
+                
+                if metadata.get('requires_attention', False):
+                    attention_tables.append(metadata.get('table', meta_file.stem))
+            except:
+                pass
+        
+        return attention_tables

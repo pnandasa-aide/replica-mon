@@ -221,10 +221,22 @@ def generate_report(
         if comparison.get('match', False):
             print("\n✅ REPLICATION VERIFIED: All operations match!")
         else:
-            print("\n⚠️  DISCREPANCY DETECTED!")
+            print("\n❌ DISCREPANCY DETECTED!")
             print("\nDiscrepancies:")
             for disc in comparison.get('discrepancies', []):
                 print(f"  - {disc}")
+            
+            # Auto-flag table for full caching
+            if use_cache:
+                cache = JournalCache()
+                print(f"\n  🚨 Auto-flagging {source_table} for full journal caching...")
+                cache.mark_requires_attention(
+                    source_table,
+                    reason=f"Discrepancy detected: {len(comparison.get('discrepancies', []))} mismatches"
+                )
+                print(f"  ℹ️  Full journal entries will be cached for investigation")
+                print(f"  ℹ️  Use: python3 compare.py --cache-info --source {source_table}")
+                print(f"  ℹ️  To reset: python3 compare.py --reset-attention --source {source_table}")
         
         print()
 
@@ -263,6 +275,8 @@ Examples:
     parser.add_argument("--no-cache", action="store_true", help="Disable journal caching")
     parser.add_argument("--cache-info", action="store_true", help="Show cache information and exit")
     parser.add_argument("--clear-cache", action="store_true", help="Clear journal cache and exit")
+    parser.add_argument("--reset-attention", action="store_true", help="Reset attention flag for table (downgrade to summary cache)")
+    parser.add_argument("--list-attention", action="store_true", help="List all tables requiring attention")
     
     args = parser.parse_args()
     
@@ -318,6 +332,33 @@ Examples:
         else:
             cache.clear_cache()
             print("✓ All caches cleared")
+        sys.exit(0)
+    
+    # Special case: reset attention flag
+    if args.reset_attention:
+        if not args.source:
+            parser.error("--source is required with --reset-attention")
+        cache = JournalCache()
+        cache.reset_attention_flag(args.source, keep_full_cache=False)
+        sys.exit(0)
+    
+    # Special case: list tables requiring attention
+    if args.list_attention:
+        cache = JournalCache()
+        attention_tables = cache.get_tables_requiring_attention()
+        print("=" * 70)
+        print("TABLES REQUIRING ATTENTION")
+        print("=" * 70)
+        if not attention_tables:
+            print("  No tables flagged for attention.")
+        else:
+            for table in attention_tables:
+                info = cache.get_cache_info(table)
+                print(f"\n  Table: {table}")
+                print(f"    Flagged At: {info['discrepancy_detected_at'] or 'Unknown'}")
+                print(f"    Reason: {info['full_cache_reason'] or 'Unknown'}")
+                print(f"    Cache Level: {info['cache_level']}")
+                print(f"    Entries Cached: {info['entry_count']}")
         sys.exit(0)
     
     # Validate required arguments for comparison
