@@ -35,21 +35,41 @@ class AS400JournalReader:
             )
             # Try to parse as JSON if possible
             try:
-                # Extract JSON from output (may have wrapper messages)
+                # Extract JSON from output (may have wrapper messages and trailing logs)
                 output = result.stdout
                 
-                # Try to find JSON object/array
-                if output.strip().startswith('{') or output.strip().startswith('['):
-                    return json.loads(output)
+                # Strip ANSI escape codes from entire output first
+                ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+                clean_output = ansi_escape.sub('', output)
                 
-                # Search for JSON in output
-                match = re.search(r'(\{[^{}]+\}|\[[^\[\]]+\])', output, re.DOTALL)
-                if match:
-                    return json.loads(match.group(1))
+                # Find JSON object - handle nested structures
+                # Look for first { and match to last }
+                start_idx = clean_output.find('{')
+                if start_idx >= 0:
+                    # Find the matching closing brace
+                    brace_count = 0
+                    end_idx = start_idx
+                    for i in range(start_idx, len(clean_output)):
+                        if clean_output[i] == '{':
+                            brace_count += 1
+                        elif clean_output[i] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                end_idx = i + 1
+                                break
+                    
+                    json_str = clean_output[start_idx:end_idx]
+                    try:
+                        return json.loads(json_str)
+                    except json.JSONDecodeError as e:
+                        # JSON extraction failed, log and fallback
+                        print(f"  ⚠️  JSON parse error: {e}")
+                        print(f"  ℹ️  Extracted (first 200 chars): {json_str[:200]}")
                 
-                # Fallback
-                return json.loads(output)
+                # Fallback: try parsing entire output
+                return json.loads(clean_output)
             except json.JSONDecodeError:
+                # Complete failure - return raw output for debugging
                 return {'output': result.stdout, 'success': True}
         except subprocess.TimeoutExpired:
             return {'error': 'Command timed out after 120 seconds', 'success': False}
