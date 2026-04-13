@@ -6,11 +6,11 @@
 ```bash
 cd /home/ubuntu/_qoder/replica-mon
 
-# Generate 10 inserts, 5 updates, 3 deletes per table
+# Generate 10 transactions per table (50% insert, 30% update, 20% delete)
 python3 generate_test_traffic.py
 
-# Generate 20 inserts, 10 updates, 6 deletes per table
-python3 generate_test_traffic.py all 20
+# Generate 50 transactions per table with same ratios
+python3 generate_test_traffic.py all 50
 ```
 
 ### Generate Specific Operations
@@ -21,11 +21,11 @@ python3 generate_test_traffic.py insert
 # Inserts only (50 per table)
 python3 generate_test_traffic.py insert 50
 
-# Updates only (5 per table)
-python3 generate_test_traffic.py update
+# Updates only (20 per table)
+python3 generate_test_traffic.py update 20
 
-# Deletes only (3 per table)
-python3 generate_test_traffic.py delete
+# Deletes only (10 per table)
+python3 generate_test_traffic.py delete 10
 ```
 
 ### Check Replication Status
@@ -39,17 +39,17 @@ python3 monitor.py --continuous --interval 300
 
 ## What It Does
 
-1. **INSERT Operations**: Adds new records with unique primary keys
-   - ORDERS: ORDER_ID, ORDER_DATE, CUSTOMER_ID, AMOUNT, STATUS
-   - CUSTOMERS: CUST_ID, NAME, EMAIL, CREATED_DATE
-   - CUSTOMERS2: CUST_ID, NAME, EMAIL, CREATED_DATE
+Uses **qadmcli mockup generate** to create realistic test data:
 
-2. **UPDATE Operations**: Modifies existing records
-   - ORDERS: Updates AMOUNT and STATUS
-   - CUSTOMERS/CUSTOMERS2: Updates NAME and EMAIL
-
-3. **DELETE Operations**: Removes oldest records
-
+1. **Automatic Schema Detection**: Reads table structure from AS400
+2. **Intelligent Data Generation**: 
+   - Detects column types (names, emails, phones, amounts, dates)
+   - Generates realistic values including Thai names
+   - Handles composite primary keys
+3. **Configurable Operations**:
+   - INSERT: Adds new records with unique PKs
+   - UPDATE: Modifies existing records
+   - DELETE: Removes records efficiently
 4. **Automatic Monitor**: After generating traffic, waits 30 seconds then runs monitor.py
 
 ## Workflow Example
