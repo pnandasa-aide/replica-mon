@@ -72,8 +72,15 @@ class AS400JournalReader:
             cache_info = self.cache.get_cache_info(table)
             
             if cache_info['cached']:
-                # Have cache - check if we need to update it
-                if since and cache_info['last_timestamp']:
+                # Check if cache is valid (has actual data)
+                if cache_info['entry_count'] == 0 and cache_info['last_timestamp'] is None:
+                    # Empty cache - likely failed query, re-fetch from AS400
+                    from datetime import datetime
+                    cached_time = datetime.strptime(cache_info['cached_at'], "%Y-%m-%d %H:%M:%S")
+                    age_hours = (datetime.now() - cached_time).total_seconds() / 3600
+                    print(f"  ℹ️  Cache is empty (cached {age_hours:.1f}h ago), re-fetching from AS400...")
+                # Have valid cache - check if we need to update it
+                elif since and cache_info['last_timestamp']:
                     # User wants data since specific time
                     if since <= cache_info['last_timestamp']:
                         # Requested time is within cache range - use cache!
