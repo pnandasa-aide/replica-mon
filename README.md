@@ -38,7 +38,61 @@ MSSQL_ADMIN_PASSWORD=your_mssql_admin_password
 
 ## Quick Start
 
-### 1. Generate Comparison Report
+### 1. Automated Monitoring (Recommended)
+
+Monitor all GlueSync entities automatically with intelligent caching:
+
+```bash
+cd ~/_qoder/replica-mon
+
+# Single check (auto-discovers entities from GlueSync)
+python3 monitor.py
+
+# Continuous monitoring every 5 minutes
+python3 monitor.py --continuous
+
+# Continuous monitoring every 1 minute
+python3 monitor.py --continuous --interval 60
+
+# JSON output (for dashboards/APIs)
+python3 monitor.py --format json
+
+# Check last hour only
+python3 monitor.py --since "$(date -d '1 hour ago' '+%Y-%m-%d %H:%M:%S')"
+```
+
+**Sample Output:**
+```
+🔍 Auto-discovering entities from GlueSync...
+  📡 Discovered pipeline: 1st pipeline (f590ab8c)
+  ✓ Found 3 active entities
+  💾 Saved discovered config to: entities.json
+
+📊 Monitoring 3 entities...
+========================================================================================================================
+  [1/3] Checking GSLIBTST.CUSTOMERS → dbo.CUSTOMERS...
+    → ✅ OK (Journal: 34559, CT: 34559)
+  [2/3] Checking GSLIBTST.CUSTOMERS2 → dbo.CUSTOMERS2...
+    → ✅ OK (Journal: 1234, CT: 1234)
+  [3/3] Checking GSLIBTST.ORDERS → dbo.ORDERS...
+    → ✅ OK (Journal: 5678, CT: 5678)
+
+========================================================================================================================
+REPLICATION MONITORING RESULTS
+========================================================================================================================
+Source Table              Target Table              Status       Journal       CT   Diff Cache       Attention
+------------------------------------------------------------------------------------------------------------------------
+GSLIBTST.CUSTOMERS        dbo.CUSTOMERS             ✅ OK          34559    34559      +0 summary    ✓ No
+GSLIBTST.CUSTOMERS2       dbo.CUSTOMERS2            ✅ OK           1234     1234      +0 summary    ✓ No
+GSLIBTST.ORDERS           dbo.ORDERS                ✅ OK           5678     5678      +0 summary    ✓ No
+========================================================================================================================
+
+Summary: 3 OK, 0 Issues, 0 Flagged for Attention
+```
+
+### 2. Single Table Comparison (Manual)
+
+For detailed comparison of a specific table:
 
 ```bash
 cd ~/_qoder/replica-mon
@@ -117,6 +171,69 @@ TOTAL                          50              50           +0         ✅
 
 ## Advanced Usage
 
+### Cache Management
+
+ReplicaMon uses intelligent tiered caching for fast performance:
+
+```bash
+# View cache status for all tables
+python3 compare.py --cache-info
+
+# View cache for specific table
+python3 compare.py --cache-info --source GSLIBTST.CUSTOMERS
+
+# Clear all caches
+python3 compare.py --clear-cache
+
+# Clear cache for specific table
+python3 compare.py --clear-cache --source GSLIBTST.CUSTOMERS
+
+# List tables requiring attention (discrepancies detected)
+python3 compare.py --list-attention
+
+# Reset attention flag for a table
+python3 compare.py --reset-attention --source GSLIBTST.CUSTOMERS
+
+# Disable caching (always query AS400)
+python3 monitor.py --no-cache
+```
+
+### How Caching Works
+
+**Tier 1: Summary Cache (Default)**
+- Stores operation counts (~1 KB per table)
+- Used for hourly monitoring
+- Fast subsequent checks (1 sec vs 60 sec)
+
+**Tier 2: Full Entry Cache (Auto-upgrade)**
+- Automatically triggered when discrepancy detected
+- Stores complete journal entries
+- Used for detailed investigation
+- Can be reset after issue resolved
+
+**Cache Update Strategy:**
+1. First run: Query AS400 (slow, builds cache)
+2. Subsequent runs: Use cache + incremental updates (fast!)
+3. Discrepancy detected: Auto-flag table for full caching
+4. Manual review: Investigate flagged tables
+5. Reset flag: Return to lightweight summary cache
+
+### Monitoring Workflow
+
+```bash
+# Start continuous monitoring (runs in background)
+python3 monitor.py --continuous --interval 300 &
+
+# Check status anytime
+python3 monitor.py --format json | python3 -m json.tool
+
+# View flagged tables
+python3 compare.py --list-attention
+
+# Stop monitoring
+kill %1  # or find PID and kill
+```
+
 ### Using qadmcli Directly
 
 You can also use qadmcli commands directly for more control:
@@ -172,6 +289,68 @@ print(f"Journal inserts: {summary['inserts']}")
 ct = MSSQLCTReader()
 ct_summary = ct.get_summary("dbo.CUSTOMERS", since="2026-04-10 01:00:00")
 print(f"CT inserts: {ct_summary['inserts']}")
+```
+
+## CLI Reference
+
+### monitor.py - Automated Entity Monitoring
+
+```bash
+python3 monitor.py [OPTIONS]
+
+Options:
+  --config FILE          Use specific entity config file
+  --since TIMESTAMP      Filter changes since timestamp
+  --format table|json    Output format (default: table)
+  --continuous           Run in continuous monitoring mode
+  --interval SECONDS     Check interval in seconds (default: 300)
+  --no-cache             Disable journal caching
+  --no-cache-status      Hide cache status in table
+  --no-auto-discover     Disable GlueSync auto-discovery
+
+Examples:
+  # Single check with auto-discovery
+  python3 monitor.py
+
+  # Continuous monitoring every 5 minutes
+  python3 monitor.py --continuous
+
+  # JSON output for dashboard
+  python3 monitor.py --format json
+
+  # Check last hour only
+  python3 monitor.py --since "$(date -d '1 hour ago' '+%Y-%m-%d %H:%M:%S')"
+```
+
+### compare.py - Single Table Comparison
+
+```bash
+python3 compare.py --source LIBRARY.TABLE --target SCHEMA.TABLE [OPTIONS]
+
+Options:
+  --source TABLE         AS400 source table (LIBRARY.TABLE)
+  --target TABLE         MSSQL target table (SCHEMA.TABLE)
+  --since TIMESTAMP      Filter changes since timestamp
+  --format table|json    Output format (default: table)
+  --timezone-only        Show timezone info and exit
+  --no-timezone          Hide timezone information
+  --no-cache             Disable journal caching
+  --cache-info           Show cache information and exit
+  --clear-cache          Clear journal cache and exit
+  --reset-attention      Reset attention flag for table
+  --list-attention       List all tables requiring attention
+
+Examples:
+  # Compare single table
+  python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS
+
+  # Compare with time filter
+  python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS \
+    --since "2026-04-13 00:00:00"
+
+  # JSON output for automation
+  python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS \
+    --format json
 ```
 
 ## Understanding the Output
@@ -272,17 +451,29 @@ Test qadmcli connections:
 ## Architecture
 
 ```
-┌─────────────┐         ┌──────────────┐         ┌─────────────┐
-│   AS400     │         │  ReplicaMon  │         │    MSSQL    │
-│   Journal   │─────┬──▶│  Comparison  │◀────┬───▶│  Change     │
-│  (Source)   │     │   │   Report     │     │    │ Tracking    │
-└─────────────┘     │   └──────────────┘     │    └─────────────┘
-                    │                        │
-                    │   ┌──────────────┐     │
-                    └──▶│  GlueSync    │◀────┘
-                        │  Replication │
-                        └──────────────┘
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│   AS400         │         │   ReplicaMon     │         │   MSSQL         │
+│   Journal       │─────┬──▶│                  │◀────┬───▶│   Change        │
+│  (Source)       │     │   │  • monitor.py    │     │    │   Tracking      │
+└─────────────────┘     │   │  • compare.py    │     │    └─────────────────┘
+                        │   │  • Auto-discovery│     │
+                        │   │  • Smart caching │     │
+                        │   └──────────────────┘     │
+                        │                            │
+                        │   ┌──────────────────┐     │
+                        └──▶│  GlueSync        │◀────┘
+                            │  Replication     │
+                            └──────────────────┘
 ```
+
+### Key Features
+
+- **Auto-Discovery**: Automatically detects entities from GlueSync pipeline
+- **Intelligent Caching**: Summary + full entry tiered caching
+- **Auto-Flagging**: Automatically flags tables with discrepancies
+- **Continuous Monitoring**: Scheduled checks with configurable intervals
+- **Timezone-Aware**: Handles AS400 (UTC+0) vs MSSQL (UTC+7) differences
+- **JSON Output**: Ready for dashboards, APIs, and automation
 
 ## Git Workflow
 
@@ -290,9 +481,24 @@ This project follows standard Git workflow practices. See [`GIT_WORKFLOW.md`](..
 
 ### Recent Changes
 
-- **v0.1.0** - Initial release with comparison report feature
-- Enhanced qadmcli with `--format summary` for both journal and CT
-- Added time-based filtering (`--from-time`, `--to-time`, `--since`)
+- **v0.3.0** - Automated monitoring with auto-discovery
+  - Added monitor.py for continuous entity monitoring
+  - Auto-discovery from GlueSync CLI (no manual config needed)
+  - Intelligent tiered caching (summary + full entry)
+  - Auto-flagging tables with discrepancies
+  - Timezone-aware comparisons (AS400 UTC+0, MSSQL UTC+7)
+  - JSON output for dashboards and APIs
+
+- **v0.2.0** - Enhanced caching and timezone handling
+  - Journal caching for 60-120x performance improvement
+  - Automatic timezone detection and normalization
+  - Cache management CLI commands
+  - Attention flag system for problematic tables
+
+- **v0.1.0** - Initial release
+  - Basic comparison report feature
+  - AS400 journal and MSSQL CT integration
+  - Time-based filtering
 
 ## License
 
