@@ -26,6 +26,65 @@ from lib.timezone import get_timezone_info, format_timezone_report, normalize_to
 from lib.journal_cache import JournalCache
 
 
+def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_path: str = "../qadmcli/qadmcli.sh") -> dict:
+    """
+    Check if entity has proper prerequisites (journal on AS400, CT on MSSQL).
+    
+    Args:
+        source_table: AS400 table (LIBRARY.TABLE)
+        target_table: MSSQL table (SCHEMA.TABLE)
+        qadmcli_path: Path to qadmcli
+        
+    Returns:
+        Dictionary with prerequisite status
+    """
+    result = {
+        'source_table': source_table,
+        'target_table': target_table,
+        'journal_enabled': False,
+        'ct_enabled': False,
+        'ready': False,
+        'issues': []
+    }
+    
+    # Check AS400 journal (quick check - just verify journal exists)
+    try:
+        parts = source_table.split('.')
+        if len(parts) == 2:
+            library, table = parts
+            cmd = [qadmcli_path, "journal", "info", "-n", table, "-l", library, "--format", "json"]
+            proc_result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            
+            if proc_result.returncode == 0:
+                import re
+                match = re.search(r'\{[^{}]+\}', proc_result.stdout, re.DOTALL)
+                if match:
+                    info = json.loads(match.group())
+                    if info.get('Journaled') == 'Yes':
+                        result['journal_enabled'] = True
+                    else:
+                        result['issues'].append(f"AS400 table {source_table} is not journaled")
+            else:
+                result['issues'].append(f"Could not check journal status for {source_table}")
+    except Exception as e:
+        result['issues'].append(f"Error checking AS400 journal: {str(e)}")
+    
+    # Check MSSQL CT
+    try:
+        ct_reader = MSSQLCTReader(qadmcli_path=qadmcli_path, use_cache=False)
+        result['ct_enabled'] = ct_reader.is_ct_enabled(target_table)
+        
+        if not result['ct_enabled']:
+            result['issues'].append(f"MSSQL Change Tracking not enabled on {target_table}")
+    except Exception as e:
+        result['issues'].append(f"Error checking MSSQL CT: {str(e)}")
+    
+    # Overall readiness
+    result['ready'] = result['journal_enabled'] and result['ct_enabled']
+    
+    return result
+
+
 def discover_entities_from_gluesync(gluesync_cli_path: str = None) -> Dict:
     """
     Auto-discover entities from GlueSync CLI.
@@ -211,6 +270,25 @@ def get_entity_comparison(
     }
     
     try:
+        # Check prerequisites first
+        if verbose:
+            print(f"    → Checking prerequisites...")
+        prereq = check_entity_prerequisites(source_table, target_table, qadmcli_path)
+        result['journal_enabled'] = prereq['journal_enabled']
+        result['ct_enabled'] = prereq['ct_enabled']
+        result['prerequisites_met'] = prereq['ready']
+        
+        if not prereq['ready']:
+            result['status'] = "⚠️  PREREQ FAILED"
+            result['issues'] = prereq['issues']
+            if verbose:
+                for issue in prereq['issues']:
+                    print(f"    → ⚠️  {issue}")
+            return result
+        
+        if verbose:
+            print(f"    → ✓ Prerequisites OK (Journal: Yes, CT: Yes)")
+        
         # Get cache info
         if verbose:
             print(f"    → Checking cache status...")
@@ -307,10 +385,10 @@ def display_results_table(results: List[Dict], show_cache: bool = True):
     
     # Table header
     if show_cache:
-        print(f"{'Source Table':<25} {'Target Table':<25} {'Status':<12} {'Journal':>8} {'CT':>8} {'Diff':>6} {'Cache':<10} {'Attention':<10}")
+        print(f"{'Source Table':<25} {'Target Table':<25} {'Status':<15} {'Journal':>8} {'CT':>8} {'Diff':>6} {'Cache':<10} {'Attention':<10}")
         print("-" * 120)
     else:
-        print(f"{'Source Table':<25} {'Target Table':<25} {'Status':<12} {'Journal':>8} {'CT':>8} {'Diff':>6}")
+        print(f"{'Source Table':<25} {'Target Table':<25} {'Status':<15} {'Journal':>8} {'CT':>8} {'Diff':>6}")
         print("-" * 90)
     
     # Table rows
@@ -322,9 +400,14 @@ def display_results_table(results: List[Dict], show_cache: bool = True):
         if show_cache:
             cache_status = r.get('cache_status', 'none')
             attention = "🚨 YES" if r.get('requires_attention', False) else "✓ No"
-            print(f"{r['source']:<25} {r['target']:<25} {r['status']:<12} {journal:>8} {ct:>8} {diff:>+6} {cache_status:<10} {attention:<10}")
+            print(f"{r['source']:<25} {r['target']:<25} {r['status']:<15} {journal:>8} {ct:>8} {diff:>+6} {cache_status:<10} {attention:<10}")
         else:
-            print(f"{r['source']:<25} {r['target']:<25} {r['status']:<12} {journal:>8} {ct:>8} {diff:>+6}")
+            print(f"{r['source']:<25} {r['target']:<25} {r['status']:<15} {journal:>8} {ct:>8} {diff:>+6}")
+        
+        # Show issues if any
+        if r.get('issues'):
+            for issue in r['issues']:
+                print(f"  ⚠️  {issue}")
     
     print("=" * 120)
     

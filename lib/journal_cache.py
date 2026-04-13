@@ -395,3 +395,98 @@ class JournalCache:
                 pass
         
         return attention_tables
+    
+    def get_ct_cache_info(self, table: str) -> dict:
+        """
+        Get CT cache information.
+        
+        Args:
+            table: Table name in format "dbo.TABLE"
+            
+        Returns:
+            Dictionary with CT cache status
+        """
+        safe_name = table.replace('.', '_').upper()
+        cache_path = self.cache_dir / f"CT_{safe_name}.json"
+        meta_path = self.cache_dir / f"CT_{safe_name}.meta.json"
+        
+        if not meta_path.exists():
+            return {
+                'table': table,
+                'cached': False,
+                'entry_count': 0,
+                'last_timestamp': None,
+                'cached_at': None,
+                'cache_size_bytes': 0,
+                'cache_size_mb': 0
+            }
+        
+        cache = {'cached_at': None, 'entry_count': 0, 'last_timestamp': None}
+        try:
+            with open(cache_path, 'r') as f:
+                cache = json.load(f)
+        except:
+            pass
+        
+        cache_size = meta_path.stat().st_size + cache_path.stat().st_size if cache_path.exists() else 0
+        
+        return {
+            'table': table,
+            'cached': cache.get('cached_at') is not None,
+            'entry_count': cache.get('entry_count', 0),
+            'last_timestamp': cache.get('last_timestamp'),
+            'cached_at': cache.get('cached_at'),
+            'cache_size_bytes': cache_size,
+            'cache_size_mb': round(cache_size / 1024 / 1024, 2)
+        }
+    
+    def save_ct_cache(self, table: str, summary: dict, last_timestamp: str = None):
+        """
+        Save CT summary to cache.
+        
+        Args:
+            table: Table name in format "dbo.TABLE"
+            summary: CT summary dictionary
+            last_timestamp: Latest change timestamp
+        """
+        safe_name = table.replace('.', '_').upper()
+        cache_path = self.cache_dir / f"CT_{safe_name}.json"
+        meta_path = self.cache_dir / f"CT_{safe_name}.meta.json"
+        
+        # Save summary
+        with open(cache_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        # Save metadata
+        metadata = {
+            'table': table,
+            'last_timestamp': last_timestamp,
+            'cached_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'entry_count': summary.get('total', 0)
+        }
+        
+        with open(meta_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    
+    def get_ct_from_cache(self, table: str, since: str = None) -> dict:
+        """
+        Get CT summary from cache.
+        
+        Args:
+            table: Table name in format "dbo.TABLE"
+            since: Filter since timestamp (not used for CT cache, reserved for future)
+            
+        Returns:
+            CT summary dictionary or None if not cached
+        """
+        safe_name = table.replace('.', '_').upper()
+        cache_path = self.cache_dir / f"CT_{safe_name}.json"
+        
+        if not cache_path.exists():
+            return None
+        
+        try:
+            with open(cache_path, 'r') as f:
+                return json.load(f)
+        except:
+            return None

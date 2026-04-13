@@ -3,13 +3,16 @@
 import json
 import subprocess
 from typing import Optional
+from .journal_cache import JournalCache
 
 
 class MSSQLCTReader:
     """Read MSSQL Change Tracking data via qadmcli."""
     
-    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh"):
+    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh", use_cache: bool = True):
         self.qadmcli_path = qadmcli_path
+        self.use_cache = use_cache
+        self.cache = JournalCache() if use_cache else None
     
     def _run_qadmcli(self, *args) -> dict:
         """Run qadmcli command and return parsed output."""
@@ -38,17 +41,26 @@ class MSSQLCTReader:
         except subprocess.CalledProcessError as e:
             return {'error': e.stderr or e.stdout, 'success': False}
     
-    def get_summary(self, table: str, since: Optional[str] = None) -> dict:
+    def get_summary(self, table: str, since: Optional[str] = None, use_cache: bool = None) -> dict:
         """
         Get Change Tracking summary for comparison with AS400 journal.
         
         Args:
             table: Table name in format "SCHEMA.TABLE"
             since: Optional timestamp in format "YYYY-MM-DD HH:MM:SS"
+            use_cache: Override instance cache setting
             
         Returns:
             Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'changes'
         """
+        # Check cache first
+        should_use_cache = use_cache if use_cache is not None else self.use_cache
+        if should_use_cache and self.cache:
+            cached = self.cache.get_ct_from_cache(table, since)
+            if cached:
+                cached['from_cache'] = True
+                return cached
+        
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format SCHEMA.TABLE, got: {table}")
@@ -76,8 +88,20 @@ class MSSQLCTReader:
                 'updates': 0,
                 'deletes': 0,
                 'changes': [],
-                'error': result.get('error', 'Unknown error')
+                'error': result.get('error', 'Unknown error'),
+                'from_cache': False
             }
+        
+        # Add from_cache flag
+        result['from_cache'] = False
+        
+        # Save to cache
+        if should_use_cache and self.cache:
+            try:
+                self.cache.save_ct_cache(table, result)
+            except Exception as e:
+                # Don't fail if cache save fails
+                pass
         
         return result
     
