@@ -387,6 +387,8 @@ def get_entity_comparison(
     except Exception as e:
         result["status"] = "❌ ERROR"
         result["error"] = str(e)
+        import traceback
+        result["traceback"] = traceback.format_exc()
         return result
 
 
