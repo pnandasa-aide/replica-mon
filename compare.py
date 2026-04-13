@@ -3,6 +3,7 @@
 Replication Comparison Report
 
 Compares AS400 journal entries with MSSQL Change Tracking to detect discrepancies.
+Handles timezone differences automatically (AS400: UTC+0, MSSQL: UTC+7).
 """
 
 import json
@@ -17,6 +18,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.as400_journal import AS400JournalReader
 from lib.mssql_ct import MSSQLCTReader
 from lib.comparator import ChangeComparator
+from lib.timezone import (
+    detect_as400_timezone,
+    detect_mssql_timezone,
+    normalize_to_as400_time,
+    normalize_to_mssql_time,
+    get_timezone_info,
+    format_timezone_report
+)
 
 
 def detect_qadmcli_path() -> str:
@@ -37,7 +46,8 @@ def generate_report(
     source_table: str,
     target_table: str,
     since: str = None,
-    output_format: str = "text"
+    output_format: str = "text",
+    show_timezone: bool = True
 ):
     """
     Generate replication comparison report.
@@ -45,9 +55,35 @@ def generate_report(
     Args:
         source_table: AS400 table in format "LIBRARY.TABLE"
         target_table: MSSQL table in format "SCHEMA.TABLE"
-        since: Optional timestamp filter
+        since: Optional timestamp filter (in user's local timezone, assumed MSSQL timezone)
         output_format: "text" or "json"
+        show_timezone: Whether to display timezone information
     """
+    # Auto-detect qadmcli path
+    qadmcli_path = detect_qadmcli_path()
+    
+    # Detect timezones
+    if show_timezone:
+        tz_info = get_timezone_info(qadmcli_path)
+        as400_tz_offset = tz_info['as400']['utc_offset']
+        mssql_tz_offset = tz_info['mssql']['utc_offset']
+    else:
+        # Fallback to known values
+        as400_tz_offset = 0  # UTC+0
+        mssql_tz_offset = 7  # UTC+7
+        tz_info = None
+    
+    # Normalize timestamp for each database
+    if since:
+        # User provides time in local/MSSQL timezone
+        # Convert to AS400 timezone for AS400 query
+        since_for_as400 = normalize_to_as400_time(since, mssql_tz_offset, as400_tz_offset)
+        # MSSQL uses the original time (already in MSSQL timezone)
+        since_for_mssql = since
+    else:
+        since_for_as400 = None
+        since_for_mssql = None
+    
     print("=" * 70)
     print("REPLICATION COMPARISON REPORT")
     print("=" * 70)
@@ -55,23 +91,25 @@ def generate_report(
     print(f"Source (AS400): {source_table}")
     print(f"Target (MSSQL): {target_table}")
     if since:
-        print(f"Since: {since}")
-    print()
+        print(f"Since (Local/MSSQL): {since_for_mssql}")
+        if since_for_as400 != since_for_mssql:
+            print(f"Since (AS400):       {since_for_as400}")
     
-    # Auto-detect qadmcli path
-    qadmcli_path = detect_qadmcli_path()
+    # Display timezone info
+    if tz_info:
+        print(format_timezone_report(tz_info))
     
-    # 1. Get AS400 journal summary
+    # 1. Get AS400 journal summary (using normalized timestamp)
     print("[1/3] Querying AS400 journal...")
     journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path)
     try:
-        journal_summary = journal_reader.get_summary(source_table, since)
+        journal_summary = journal_reader.get_summary(source_table, since_for_as400)
         print(f"  ✓ Retrieved {journal_summary.get('total', 0)} journal entries")
     except Exception as e:
         print(f"  ✗ Error: {e}")
         return
     
-    # 2. Get MSSQL CT summary
+    # 2. Get MSSQL CT summary (using original timestamp)
     print("[2/3] Querying MSSQL Change Tracking...")
     ct_reader = MSSQLCTReader(qadmcli_path=qadmcli_path)
     
@@ -190,17 +228,55 @@ def generate_report(
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Generate replication comparison report")
-    parser.add_argument("--source", required=True, help="AS400 table (LIBRARY.TABLE)")
-    parser.add_argument("--target", required=True, help="MSSQL table (SCHEMA.TABLE)")
-    parser.add_argument("--since", help="Filter since timestamp (YYYY-MM-DD HH:MM:SS)")
+    parser = argparse.ArgumentParser(
+        description="Generate replication comparison report",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Timezone Handling:
+  The script automatically detects and handles timezone differences:
+  - AS400: UTC+0
+  - MSSQL: UTC+7 (Asia/Bangkok)
+  - User timestamps are assumed to be in local/MSSQL timezone
+  - Timestamps are automatically normalized for each database
+
+Examples:
+  # Compare with automatic timezone handling
+  python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.Customers
+  
+  # Compare changes since specific time (in your local timezone)
+  python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.Customers --since "2026-04-13 06:30:00"
+  
+  # Hide timezone information
+  python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.Customers --no-timezone
+        """
+    )
+    parser.add_argument("--source", help="AS400 table (LIBRARY.TABLE)")
+    parser.add_argument("--target", help="MSSQL table (SCHEMA.TABLE)")
+    parser.add_argument("--since", help="Filter since timestamp (YYYY-MM-DD HH:MM:SS, in local timezone)")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+    parser.add_argument("--no-timezone", action="store_true", help="Hide timezone information")
+    parser.add_argument("--timezone-only", action="store_true", help="Only show timezone info and exit")
     
     args = parser.parse_args()
+    
+    # Special case: show timezone info only
+    if args.timezone_only:
+        qadmcli_path = detect_qadmcli_path()
+        tz_info = get_timezone_info(qadmcli_path)
+        print("=" * 70)
+        print("TIMEZONE INFORMATION")
+        print("=" * 70)
+        print(format_timezone_report(tz_info))
+        sys.exit(0)
+    
+    # Validate required arguments for comparison
+    if not args.source or not args.target:
+        parser.error("--source and --target are required for comparison (or use --timezone-only)")
     
     generate_report(
         source_table=args.source,
         target_table=args.target,
         since=args.since,
-        output_format=args.format
+        output_format=args.format,
+        show_timezone=not args.no_timezone
     )

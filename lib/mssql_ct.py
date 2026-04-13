@@ -22,7 +22,17 @@ class MSSQLCTReader:
                 check=True
             )
             try:
-                return json.loads(result.stdout)
+                # Extract JSON from output (may have shell wrapper messages and INFO logs)
+                import re
+                output = result.stdout
+                
+                # Find JSON object pattern
+                match = re.search(r'\{[^{}]+\}', output, re.DOTALL)
+                if match:
+                    return json.loads(match.group())
+                else:
+                    # Fallback: try parsing entire output
+                    return json.loads(output)
             except json.JSONDecodeError:
                 return {'output': result.stdout, 'success': True}
         except subprocess.CalledProcessError as e:
@@ -170,7 +180,8 @@ class MSSQLCTReader:
         result = self._run_qadmcli(
             "mssql", "ct", "status",
             "-t", table_name,
-            "-s", schema
+            "-s", schema,
+            "--format", "json"  # Add JSON format
         )
         
         if 'error' in result:
