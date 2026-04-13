@@ -11,6 +11,7 @@ import json
 import sys
 import time
 import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -25,37 +26,163 @@ from lib.timezone import get_timezone_info, format_timezone_report, normalize_to
 from lib.journal_cache import JournalCache
 
 
-def load_pipeline_config(config_path: str = None) -> Dict:
+def discover_entities_from_gluesync(gluesync_cli_path: str = None) -> Dict:
     """
-    Load pipeline configuration from gluesync config.
+    Auto-discover entities from GlueSync CLI.
+    
+    Args:
+        gluesync_cli_path: Path to gluesync_cli.py
+        
+    Returns:
+        Dictionary with pipeline and entity information
+    """
+    if gluesync_cli_path is None:
+        # Auto-detect gluesync-cli location
+        script_dir = Path(__file__).parent.parent
+        gluesync_cli_path = script_dir / "gluesync-cli" / "gluesync_cli.py"
+    
+    if not os.path.exists(gluesync_cli_path):
+        print(f"  ⚠️  GlueSync CLI not found at: {gluesync_cli_path}")
+        print(f"  ℹ️  Falling back to entities.json if available")
+        return None
+    
+    try:
+        # Step 1: Get pipeline list
+        result = subprocess.run(
+            ["python3", str(gluesync_cli_path), "-o", "json", "pipeline", "list"],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        
+        if result.returncode != 0:
+            print(f"  ⚠️  Failed to get pipeline list: {result.stderr}")
+            return None
+        
+        pipelines = json.loads(result.stdout)
+        
+        if not pipelines:
+            print(f"  ⚠️  No pipelines found in GlueSync")
+            return None
+        
+        # Use first pipeline (or you could add logic to select specific one)
+        pipeline = pipelines[0]
+        pipeline_id = pipeline.get('id')
+        pipeline_name = pipeline.get('name', 'Unknown')
+        
+        if not pipeline_id:
+            print(f"  ⚠️  Pipeline has no ID")
+            return None
+        
+        print(f"  📡 Discovered pipeline: {pipeline_name} ({pipeline_id})")
+        
+        # Step 2: Get entities for this pipeline
+        result = subprocess.run(
+            ["python3", str(gluesync_cli_path), "-o", "json", "entity", "list", pipeline_id],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        
+        if result.returncode != 0:
+            print(f"  ⚠️  Failed to get entities: {result.stderr}")
+            return None
+        
+        entities_raw = json.loads(result.stdout)
+        
+        # Step 3: Transform to our format
+        entities = []
+        for entity in entities_raw:
+            entity_name = entity.get('entityName', '')
+            entity_id = entity.get('entityId', '')
+            status = entity.get('status', 'unknown')
+            
+            # Parse AS400 table name (format: LIBRARY.TABLE)
+            source_table = entity_name
+            
+            # Generate target table name (replace library with dbo)
+            parts = entity_name.split('.')
+            if len(parts) == 2:
+                target_table = f"dbo.{parts[1]}"
+            else:
+                target_table = f"dbo.{entity_name}"
+            
+            entities.append({
+                "entityId": entity_id,
+                "source": source_table,
+                "target": target_table,
+                "status": "active" if status == "configured" else status,
+                "description": f"Auto-discovered from GlueSync"
+            })
+        
+        print(f"  ✓ Found {len(entities)} active entities")
+        
+        return {
+            "pipeline": pipeline_id,
+            "pipeline_name": pipeline_name,
+            "description": f"Auto-discovered from GlueSync pipeline",
+            "discovered_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "entities": entities
+        }
+        
+    except subprocess.TimeoutExpired:
+        print(f"  ⚠️  GlueSync CLI command timed out")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"  ⚠️  Failed to parse GlueSync CLI output: {e}")
+        return None
+    except Exception as e:
+        print(f"  ⚠️  Error discovering entities: {e}")
+        return None
+
+
+def load_pipeline_config(config_path: str = None, auto_discover: bool = True) -> Dict:
+    """
+    Load pipeline configuration.
+    
+    Priority:
+    1. If config_path specified: Load from file
+    2. If auto_discover=True: Try GlueSync CLI
+    3. Fallback: Load from default entities.json
     
     Returns:
         Dictionary with pipeline and entity information
     """
-    # For now, we'll use a simple entity list
-    # In production, this would read from GlueSync API or config file
-    config_file = config_path or "entities.json"
+    # Option 1: Explicit config file
+    if config_path:
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            print(f"  📄 Loaded config from: {config_path}")
+            return config
+        else:
+            print(f"  ⚠️  Config file not found: {config_path}")
+            if not auto_discover:
+                return {"entities": []}
     
-    if os.path.exists(config_file):
-        with open(config_file, 'r') as f:
-            return json.load(f)
+    # Option 2: Auto-discover from GlueSync CLI
+    if auto_discover:
+        print("\n🔍 Auto-discovering entities from GlueSync...")
+        config = discover_entities_from_gluesync()
+        if config:
+            # Save discovered config for future reference
+            default_config = Path(__file__).parent / "entities.json"
+            with open(default_config, 'w') as f:
+                json.dump(config, f, indent=2)
+            print(f"  💾 Saved discovered config to: {default_config}")
+            return config
     
-    # Default example configuration
-    return {
-        "pipeline": "main-pipeline",
-        "entities": [
-            {
-                "source": "GSLIBTST.CUSTOMERS",
-                "target": "dbo.Customers",
-                "status": "active"
-            },
-            {
-                "source": "GSLIBTST.CUSTOMERS2",
-                "target": "dbo.Customers2",
-                "status": "active"
-            }
-        ]
-    }
+    # Option 3: Fallback to default entities.json
+    default_config = Path(__file__).parent / "entities.json"
+    if default_config.exists():
+        with open(default_config, 'r') as f:
+            config = json.load(f)
+        print(f"  📄 Loaded from cache: {default_config}")
+        return config
+    
+    # No config available
+    print(f"  ⚠️  No configuration available")
+    return {"entities": []}
 
 
 def get_entity_comparison(
@@ -352,11 +479,15 @@ Examples:
     parser.add_argument("--interval", type=int, default=300, help="Check interval in seconds (default: 300 = 5 min)")
     parser.add_argument("--no-cache", action="store_true", help="Disable caching")
     parser.add_argument("--no-cache-status", action="store_true", help="Hide cache status in table")
+    parser.add_argument("--no-auto-discover", action="store_true", help="Disable auto-discovery from GlueSync CLI (use entities.json only)")
     
     args = parser.parse_args()
     
-    # Load configuration
-    config = load_pipeline_config(args.config)
+    # Load configuration with auto-discovery
+    config = load_pipeline_config(
+        config_path=args.config,
+        auto_discover=not args.no_auto_discover
+    )
     
     # Run monitoring
     if args.continuous:
