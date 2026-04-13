@@ -42,19 +42,31 @@ class AS400JournalReader:
                 ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
                 clean_output = ansi_escape.sub('', output)
                 
-                # Find JSON object - handle nested structures
-                # Look for first { and match to last }
-                start_idx = clean_output.find('{')
-                if start_idx >= 0:
-                    # Find the matching closing brace
-                    brace_count = 0
+                # Find JSON - handle both objects {} and arrays []
+                # Look for first { or [
+                start_idx_obj = clean_output.find('{')
+                start_idx_arr = clean_output.find('[')
+                
+                if start_idx_obj >= 0 or start_idx_arr >= 0:
+                    # Use whichever comes first
+                    if start_idx_obj >= 0 and (start_idx_arr < 0 or start_idx_obj < start_idx_arr):
+                        start_idx = start_idx_obj
+                        open_char = '{'
+                        close_char = '}'
+                    else:
+                        start_idx = start_idx_arr
+                        open_char = '['
+                        close_char = ']'
+                    
+                    # Find the matching closing bracket/brace
+                    bracket_count = 0
                     end_idx = start_idx
                     for i in range(start_idx, len(clean_output)):
-                        if clean_output[i] == '{':
-                            brace_count += 1
-                        elif clean_output[i] == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
+                        if clean_output[i] == open_char:
+                            bracket_count += 1
+                        elif clean_output[i] == close_char:
+                            bracket_count -= 1
+                            if bracket_count == 0:
                                 end_idx = i + 1
                                 break
                     
