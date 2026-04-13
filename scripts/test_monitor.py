@@ -276,34 +276,28 @@ class TestMonitor:
         print(f"  Row Count Verification")
         print(f"{'─'*70}")
         
-        # AS400 count - use subprocess with better parsing
+        # AS400 count - use --format json for clean output
         cmd_source = [
             self.qadmcli_path,
             "sql", "execute",
-            "-q", f"SELECT COUNT(*) as CNT FROM {table_mapping['source']}"
+            "-q", f"SELECT COUNT(*) as CNT FROM {table_mapping['source']}",
+            "--format", "json"  # Use JSON for easy parsing
         ]
         
         result_source = self.run_command(cmd_source, "Counting AS400 rows")
         source_count = 0
         if result_source["success"]:
-            # Parse AS400 output - find the line after the dashes
-            # Output format:
-            # Query
-            # Results
-            #  CNT  
-            # -----
-            #  66  
-            output = result_source["stdout"]
-            lines = output.split('\n')
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                # Look for separator line (-----)
-                if stripped.startswith('-----') and i + 1 < len(lines):
-                    # Next line should be the value
-                    value_line = lines[i + 1].strip()
-                    if value_line.isdigit():
-                        source_count = int(value_line)
-                        break
+            try:
+                # Extract JSON from output (may have shell wrapper messages)
+                import re
+                output = result_source["stdout"]
+                
+                # Find JSON array pattern
+                match = re.search(r'\[\s*\{\s*"CNT"\s*:\s*(\d+)\s*\}\s*\]', output, re.DOTALL)
+                if match:
+                    source_count = int(match.group(1))
+            except Exception as e:
+                print(f"  ⚠️  Warning: Could not parse AS400 count: {e}")
         
         # MSSQL count - use subprocess with better JSON extraction
         target_parts = table_mapping['target'].split('.')
