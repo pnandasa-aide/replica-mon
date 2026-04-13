@@ -563,6 +563,14 @@ def run_continuous_monitoring(
                 qadmcli_path=qadmcli_path
             )
             
+            # Save metrics to file-based storage
+            try:
+                from lib.metrics_storage import save_monitoring_metrics
+                save_monitoring_metrics(results)
+            except Exception as e:
+                if verbose:
+                    print(f"  ⚠️  Warning: Could not save metrics: {e}")
+            
             # Wait for next cycle
             if interval_seconds > 0:
                 print(f"\n⏳ Next check in {interval_seconds} seconds... (Ctrl+C to stop)")

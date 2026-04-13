@@ -92,13 +92,41 @@ class AS400JournalReader:
             cache_info = self.cache.get_cache_info(table)
             
             if cache_info['cached']:
-                # Check if cache is valid (has actual data)
-                if cache_info['entry_count'] == 0 and cache_info['last_timestamp'] is None:
-                    # Empty cache - likely failed query, re-fetch from AS400
+                # Check if cache has summary data
+                if cache_info['entry_count'] == 0 and cache_info.get('cache_level') == 'summary':
+                    # Summary cache with no individual entries - this is expected
+                    # Check if we have summary metadata
+                    meta_path = self.cache._get_metadata_path(table)
+                    if meta_path.exists():
+                        try:
+                            import json
+                            with open(meta_path, 'r') as f:
+                                meta = json.load(f)
+                            
+                            # Check if summary data is recent (< 1 hour old)
+                            if 'summary_cached_at' in meta:
+                                from datetime import datetime
+                                cached_time = datetime.strptime(meta['summary_cached_at'], "%Y-%m-%d %H:%M:%S")
+                                age_minutes = (datetime.now() - cached_time).total_seconds() / 60
+                                
+                                if age_minutes < 60:  # Cache valid for 1 hour
+                                    print(f"  ℹ️  Using summary cache ({age_minutes:.0f}m old, {meta.get('summary_total', 0)} entries)")
+                                    return {
+                                        'table': table,
+                                        'total': meta.get('summary_total', 0),
+                                        'inserts': meta.get('summary_inserts', 0),
+                                        'updates': meta.get('summary_updates', 0),
+                                        'deletes': meta.get('summary_deletes', 0),
+                                        'from_cache': True
+                                    }
+                        except Exception as e:
+                            print(f"  ⚠️  Cache read error: {e}")
+                    
+                    # No valid summary metadata - re-fetch
                     from datetime import datetime
                     cached_time = datetime.strptime(cache_info['cached_at'], "%Y-%m-%d %H:%M:%S")
                     age_hours = (datetime.now() - cached_time).total_seconds() / 3600
-                    print(f"  ℹ️  Cache is empty (cached {age_hours:.1f}h ago), re-fetching from AS400...")
+                    print(f"  ℹ️  Summary cache expired ({age_hours:.1f}h ago), re-fetching from AS400...")
                 # Have valid cache - check if we need to update it
                 elif since and cache_info['last_timestamp']:
                     # User wants data since specific time
@@ -154,20 +182,23 @@ class AS400JournalReader:
         if self.use_cache and self.cache and not since:
             # Only cache full summary (not filtered)
             try:
-                # Extract entries from result
-                entries_data = []
-                for entry_info in result.get('entries', []):
-                    # Reconstruct individual entries from summary
-                    # This is a simplification - we store the summary counts
-                    pass
-                
-                # For now, just cache the summary result
+                # Save summary counts to cache metadata
+                # We don't store individual entries in summary mode
                 self.cache.save_cache(
                     table,
-                    entries=[],  # Summary doesn't have individual entries
-                    last_timestamp=None,
-                    last_sequence=0
+                    entries=[],  # Summary mode: no individual entries
+                    last_timestamp=result.get('newest_timestamp'),
+                    last_sequence=result.get('newest_sequence', 0),
+                    cache_level="summary",
+                    metadata={
+                        'summary_inserts': result.get('inserts', 0),
+                        'summary_updates': result.get('updates', 0),
+                        'summary_deletes': result.get('deletes', 0),
+                        'summary_total': result.get('total', 0),
+                        'summary_cached_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
                 )
+                print(f"  ✓ Summary cache updated: {result.get('total', 0)} total entries")
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not update cache: {e}")
         
