@@ -27,10 +27,10 @@ cd ~/_qoder/qadmcli
     )"
 
 # Enable journaling
-./qadmcli.sh journal enable -n CUSTOMERS -l GSLIBTST
+./qadmcli.sh journal enable -t CUSTOMERS -l GSLIBTST
 
 # Verify journaling
-./qadmcli.sh journal info -n CUSTOMERS -l GSLIBTST
+./qadmcli.sh journal info -t CUSTOMERS -l GSLIBTST
 ```
 
 ---
@@ -143,13 +143,13 @@ cd ~/_qoder/qadmcli
 cd ~/_qoder/qadmcli
 
 # Get journal summary (operation counts)
-./qadmcli.sh journal entries -n CUSTOMERS -l GSLIBTST --format summary
+./qadmcli.sh journal entries -t CUSTOMERS -l GSLIBTST --format summary
 
 # Get detailed journal entries
-./qadmcli.sh journal entries -n CUSTOMERS -l GSLIBTST --limit 50 --format json
+./qadmcli.sh journal entries -t CUSTOMERS -l GSLIBTST --limit 50 --format json
 
 # Filter by time range
-./qadmcli.sh journal entries -n CUSTOMERS -l GSLIBTST \
+./qadmcli.sh journal entries -t CUSTOMERS -l GSLIBTST \
     --from-time "2026-04-10 01:00:00" \
     --to-time "2026-04-10 02:00:00" \
     --format summary
@@ -266,7 +266,7 @@ for TABLE in "${TABLES[@]}"; do
     
     # Source journal
     cd ~/_qoder/qadmcli
-    ./qadmcli.sh journal entries -n "$TABLE" -l "$LIBRARY" --format summary
+    ./qadmcli.sh journal entries -t "$TABLE" -l "$LIBRARY" --format summary
     
     # Target CT
     ./qadmcli.sh mssql ct changes -t "$TABLE" -s "$SCHEMA" --format summary
@@ -347,10 +347,10 @@ cd ~/_qoder/qadmcli
 ### Journal Not Enabled
 ```bash
 # Check journal status
-./qadmcli.sh journal info -n CUSTOMERS -l GSLIBTST
+./qadmcli.sh journal info -t CUSTOMERS -l GSLIBTST
 
 # Enable if needed
-./qadmcli.sh journal enable -n CUSTOMERS -l GSLIBTST
+./qadmcli.sh journal enable -t CUSTOMERS -l GSLIBTST
 ```
 
 ### Replication Lag

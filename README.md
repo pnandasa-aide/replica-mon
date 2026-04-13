@@ -245,10 +245,10 @@ source ../.env
 export AS400_USER AS400_PASSWORD
 
 # Get summary
-./qadmcli.sh journal entries -n CUSTOMERS -l GSLIBTST --format summary
+./qadmcli.sh journal entries -t CUSTOMERS -l GSLIBTST --format summary
 
 # Filter by time range
-./qadmcli.sh journal entries -n CUSTOMERS -l GSLIBTST \
+./qadmcli.sh journal entries -t CUSTOMERS -l GSLIBTST \
   --from-time "2026-04-10 01:00:00" \
   --to-time "2026-04-10 02:00:00" \
   --format summary
@@ -442,7 +442,7 @@ export AS400_USER AS400_PASSWORD MSSQL_USER MSSQL_PASSWORD
 Test qadmcli connections:
 ```bash
 # Test AS400
-./qadmcli.sh journal info -n CUSTOMERS -l GSLIBTST
+./qadmcli.sh journal info -t CUSTOMERS -l GSLIBTST
 
 # Test MSSQL
 ./qadmcli.sh mssql ct status -t CUSTOMERS -s dbo

@@ -53,7 +53,7 @@ def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_pat
         if len(parts) == 2:
             library, table = parts
             # journal info doesn't support --format json, parse table output
-            cmd = [qadmcli_path, "journal", "info", "-n", table, "-l", library]
+            cmd = [qadmcli_path, "journal", "info", "-t", table, "-l", library, "--format", "json"]
             proc_result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             
             if proc_result.returncode == 0:

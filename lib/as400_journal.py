@@ -126,7 +126,7 @@ class AS400JournalReader:
         # Call qadmcli with summary format
         cmd_args = [
             "journal", "entries",
-            "-n", table_name,
+            "-t", table_name,
             "-l", library,
             "--format", "summary"
         ]
@@ -195,7 +195,7 @@ class AS400JournalReader:
         # Call qadmcli to get journal entries
         cmd_args = [
             "journal", "entries",
-            "-n", table_name,
+            "-t", table_name,
             "-l", library,
             "--format", "json",
             "--limit", str(limit)

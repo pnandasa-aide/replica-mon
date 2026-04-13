@@ -258,14 +258,14 @@ for TABLE in "${TABLES[@]}"; do
     fi
     
     # Check if journaling is already enabled
-    JOURNAL_STATUS=$(./qadmcli.sh journal info -n "$TABLE" -l "$LIBRARY" 2>&1 | grep "Journaled:" | awk '{print $2}')
+    JOURNAL_STATUS=$(./qadmcli.sh journal info -t "$TABLE" -l "$LIBRARY" 2>&1 | grep "Journaled:" | awk '{print $2}')
     
     if [ "$JOURNAL_STATUS" = "Yes" ]; then
         log_warn "Journaling already enabled on $LIBRARY.$TABLE"
     else
         # Enable journaling on table
         run_cmd_allow_fail \
-            "./qadmcli.sh journal enable -n \"$TABLE\" -l \"$LIBRARY\" 2>&1 | tail -3" \
+            "./qadmcli.sh journal enable -t \"$TABLE\" -l \"$LIBRARY\" 2>&1 | tail -3" \
             "Enable journaling on $LIBRARY.$TABLE"
     fi
     

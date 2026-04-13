@@ -60,7 +60,7 @@ REPLICA_DIR="$SCRIPT_DIR"
   Command: ./qadmcli.sh as400 execute -q "CREATE TABLE GSLIBTST.CUSTOMERS (...)" 2>&1 | tail -5
 
 [INFO] [DRY-RUN] Would execute: Enable journaling on GSLIBTST.CUSTOMERS
-  Command: ./qadmcli.sh journal enable -n "CUSTOMERS" -l "GSLIBTST" 2>&1 | tail -3
+  Command: ./qadmcli.sh journal enable -t "CUSTOMERS" -l "GSLIBTST" 2>&1 | tail -3
 
 [SUCCESS] Table GSLIBTST.CUSTOMERS created with journaling
 ```
@@ -191,7 +191,7 @@ done
 ```bash
 for TABLE in "${TABLES[@]}"; do
     # Check journal for THIS table only
-    ./qadmcli.sh journal entries -n "$TABLE" -l GSLIBTST --format summary
+    ./qadmcli.sh journal entries -t "$TABLE" -l GSLIBTST --format summary
     
     # Check CT for THIS table only
     ./qadmcli.sh mssql ct changes -t "$TABLE" -s dbo --format summary
