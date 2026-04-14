@@ -100,9 +100,12 @@ class AS400JournalReader:
         Returns:
             Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'from_cache'
         """
-        # Try cache first for time-windowed queries
+        # Always fetch new entries first (incremental update)
+        # This ensures cache is up-to-date before aggregation
+        fetch_result = self._fetch_from_as400(table, since)
+        
+        # If time-windowed aggregation requested and cache exists, aggregate from cache
         if self.use_cache and self.cache and use_time_window and since:
-            # Check if we can serve from cache
             cache_info = self.cache.get_cache_info(table)
             
             if cache_info['cached'] and cache_info.get('cache_level') == 'full':
@@ -112,8 +115,8 @@ class AS400JournalReader:
                     print(f"  ℹ️  Using cached entries for time window (fast)")
                     return summary
         
-        # Fetch from AS400 (initial load or incremental update)
-        return self._fetch_from_as400(table, since)
+        # Return the fetch result (either no cache or aggregation failed)
+        return fetch_result
     
     def _fetch_from_as400(self, table: str, since: Optional[str] = None) -> dict:
         """
@@ -135,9 +138,11 @@ class AS400JournalReader:
         
         # Check if we have cached data to resume from
         last_sequence = 0
+        last_timestamp = None
         if self.use_cache and self.cache:
             cache_info = self.cache.get_cache_info(table)
             last_sequence = cache_info.get('last_sequence', 0)
+            last_timestamp = cache_info.get('last_timestamp')
         
         # Build command
         cmd_args = [
@@ -147,10 +152,11 @@ class AS400JournalReader:
             "--format", "json"  # Get individual entries with timestamps!
         ]
         
-        # If we have cached data, fetch only new entries
-        if last_sequence > 0:
-            cmd_args.extend(["--from-sequence", str(last_sequence + 1)])
-            print(f"  ℹ️  Fetching new journal entries since sequence {last_sequence}...")
+        # If we have cached data, fetch only new entries since last timestamp
+        # Note: qadmcli doesn't support --from-sequence, so we use --from-time
+        if last_timestamp:
+            cmd_args.extend(["--from-time", last_timestamp])
+            print(f"  ℹ️  Fetching new journal entries since {last_timestamp}...")
         elif since:
             cmd_args.extend(["--from-time", since])
             print(f"  ℹ️  Fetching journal entries since {since}...")
@@ -198,6 +204,8 @@ class AS400JournalReader:
                 print(f"  ✓ Cached {new_count} new entries (total: {len(entries)})")
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not update cache: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Aggregate counts
         summary = self._count_by_type(entries)
