@@ -79,8 +79,7 @@ class MSSQLCTReader:
         fetch_result = self._fetch_from_mssql(table, since)
         
         # If time-windowed aggregation requested and cache exists, aggregate from cache
-        should_use_cache = use_cache if use_cache is not None else self.use_cache
-        if should_use_cache and self.cache and use_time_window and since:
+        if self.use_cache and self.cache and use_time_window and since:
             cache_info = self.cache.get_cache_info(f"CT_{table}")
             
             if cache_info['cached'] and cache_info.get('cache_level') == 'full':
