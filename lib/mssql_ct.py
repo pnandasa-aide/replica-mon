@@ -41,43 +41,81 @@ class MSSQLCTReader:
         except subprocess.CalledProcessError as e:
             return {'error': e.stderr or e.stdout, 'success': False}
     
-    def get_summary(self, table: str, since: Optional[str] = None, use_cache: bool = None) -> dict:
+    def get_summary(self, table: str, since: Optional[str] = None, use_time_window: bool = False) -> dict:
         """
-        Get Change Tracking summary for comparison with AS400 journal.
+        Get Change Tracking summary with proper caching of individual changes.
         
         Args:
             table: Table name in format "SCHEMA.TABLE"
             since: Optional timestamp in format "YYYY-MM-DD HH:MM:SS"
-            use_cache: Override instance cache setting
+            use_time_window: If True, aggregate from cache by time window
             
         Returns:
-            Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'changes'
+            Dict with 'table', 'total', 'inserts', 'updates', 'deletes', 'from_cache'
         """
-        # Check cache first
-        should_use_cache = use_cache if use_cache is not None else self.use_cache
-        if should_use_cache and self.cache:
-            cached = self.cache.get_ct_from_cache(table, since)
-            if cached:
-                cached['from_cache'] = True
-                return cached
+        # Always fetch new changes first (incremental update)
+        # This ensures cache is up-to-date before aggregation
+        fetch_result = self._fetch_from_mssql(table, since)
         
+        # If time-windowed aggregation requested and cache exists, aggregate from cache
+        should_use_cache = use_cache if use_cache is not None else self.use_cache
+        if should_use_cache and self.cache and use_time_window and since:
+            cache_info = self.cache.get_cache_info(f"CT_{table}")
+            
+            if cache_info['cached'] and cache_info.get('cache_level') == 'full':
+                # Have full change cache - aggregate by time window
+                summary = self._aggregate_ct_from_cache(table, since)
+                if summary:
+                    print(f"  ℹ️  Using cached CT changes for time window (fast)")
+                    return summary
+        
+        # Return the fetch result (either no cache or aggregation failed)
+        return fetch_result
+    
+    def _fetch_from_mssql(self, table: str, since: Optional[str] = None) -> dict:
+        """
+        Fetch CT changes from MSSQL and cache them.
+        Performs incremental fetch if metadata exists.
+        
+        Args:
+            table: Table name in format "SCHEMA.TABLE"
+            since: Optional timestamp filter
+            
+        Returns:
+            Summary dictionary with counts
+        """
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format SCHEMA.TABLE, got: {table}")
         
         schema, table_name = parts
         
-        # Call qadmcli with summary format
+        # Check if we have cached data to resume from
+        last_version = 0
+        if self.use_cache and self.cache:
+            cache_info = self.cache.get_cache_info(f"CT_{table}")
+            last_version = cache_info.get('last_sequence', 0)  # Reuse last_sequence field for CT version
+        
+        # Build command
         cmd_args = [
             "mssql", "ct", "changes",
             "-t", table_name,
             "-s", schema,
-            "--format", "summary"
+            "--format", "json"  # Get individual changes with version numbers!
         ]
         
-        if since:
+        # If we have cached data, fetch only new changes
+        # CT supports --since-version for incremental fetch
+        if last_version > 0:
+            cmd_args.extend(["--since-version", str(last_version + 1)])
+            print(f"  ℹ️  Fetching new CT changes since version {last_version}...")
+        elif since:
             cmd_args.extend(["--since", since])
+            print(f"  ℹ️  Fetching CT changes since {since}...")
+        else:
+            print(f"  ℹ️  Fetching all CT changes (initial load)...")
         
+        # Execute command
         result = self._run_qadmcli(*cmd_args)
         
         if 'error' in result:
@@ -87,23 +125,131 @@ class MSSQLCTReader:
                 'inserts': 0,
                 'updates': 0,
                 'deletes': 0,
-                'changes': [],
-                'error': result.get('error', 'Unknown error'),
-                'from_cache': False
+                'from_cache': False,
+                'error': result.get('error', 'Unknown error')
             }
         
-        # Add from_cache flag
-        result['from_cache'] = False
+        # Parse changes
+        changes = result if isinstance(result, list) else result.get('changes', [])
         
-        # Save to cache
-        if should_use_cache and self.cache:
+        # Update cache with new changes
+        if self.use_cache and self.cache and changes:
             try:
-                self.cache.save_ct_cache(table, result)
+                # Append new changes to cache
+                # Reuse append_entries but with CT-specific naming
+                cache_table_name = f"CT_{table}"
+                new_count = self.cache.append_entries(
+                    cache_table_name,
+                    changes,
+                    last_timestamp=changes[-1].get('sys_change_timestamp'),
+                    last_sequence=changes[-1].get('sys_change_version', 0)
+                )
+                
+                # Update metadata to mark as full cache
+                meta_path = self.cache._get_metadata_path(cache_table_name)
+                if meta_path.exists():
+                    import json
+                    with open(meta_path, 'r') as f:
+                        metadata = json.load(f)
+                    metadata['cache_level'] = 'full'
+                    with open(meta_path, 'w') as f:
+                        json.dump(metadata, f, indent=2)
+                
+                print(f"  ✓ Cached {new_count} new CT changes (total: {len(changes)})")
             except Exception as e:
-                # Don't fail if cache save fails
-                pass
+                print(f"  ⚠️  Warning: Could not update CT cache: {e}")
         
-        return result
+        # Aggregate counts
+        summary = self._count_ct_by_operation(changes)
+        summary['table'] = table
+        summary['from_cache'] = False
+        
+        return summary
+    
+    def _aggregate_ct_from_cache(self, table: str, since: str) -> dict:
+        """
+        Aggregate CT changes from cache by time window.
+        
+        Args:
+            table: Table name
+            since: Start of time window "YYYY-MM-DD HH:MM:SS"
+            
+        Returns:
+            Summary dict or None if cache unavailable
+        """
+        if not self.cache:
+            return None
+        
+        try:
+            # Load cached changes (use CT_ prefix)
+            cache_table_name = f"CT_{table}"
+            cache_data = self.cache.load_cache(cache_table_name)
+            changes = cache_data.get('entries', [])
+            
+            if not changes:
+                return None
+            
+            # Filter changes by time window
+            window_changes = [
+                c for c in changes
+                if c.get('sys_change_timestamp', '') >= since
+            ]
+            
+            if not window_changes:
+                # No changes in this window
+                return {
+                    'table': table,
+                    'total': 0,
+                    'inserts': 0,
+                    'updates': 0,
+                    'deletes': 0,
+                    'from_cache': True
+                }
+            
+            # Aggregate by operation
+            summary = self._count_ct_by_operation(window_changes)
+            summary['table'] = table
+            summary['from_cache'] = True
+            
+            return summary
+        except Exception as e:
+            print(f"  ⚠️  CT cache aggregation error: {e}")
+            return None
+    
+    def _count_ct_by_operation(self, changes: list) -> dict:
+        """
+        Count CT changes by operation type.
+        
+        Args:
+            changes: List of CT change dicts
+            
+        Returns:
+            Dict with total, inserts, updates, deletes
+        """
+        inserts = 0
+        updates = 0
+        deletes = 0
+        
+        for change in changes:
+            operation = change.get('sys_change_operation', '')
+            
+            # MSSQL CT operation codes:
+            # I = Insert
+            # U = Update
+            # D = Delete
+            if operation == 'I':
+                inserts += 1
+            elif operation == 'U':
+                updates += 1
+            elif operation == 'D':
+                deletes += 1
+        
+        return {
+            'total': len(changes),
+            'inserts': inserts,
+            'updates': updates,
+            'deletes': deletes
+        }
     
     def get_changes(self, table: str, since: Optional[str] = None, limit: int = 1000) -> dict:
         """

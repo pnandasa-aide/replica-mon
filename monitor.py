@@ -369,18 +369,40 @@ def get_entity_comparison(
         
         # Get MSSQL CT summary
         if verbose:
-            print(f"    → Querying MSSQL Change Tracking...")
-        ct_reader = MSSQLCTReader(qadmcli_path=qadmcli_path)
+            if time_window_start:
+                print(f"    → Querying MSSQL CT (time window: {time_window_start} to now)...")
+            else:
+                print(f"    → Querying MSSQL Change Tracking...")
+        ct_reader = MSSQLCTReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
         
         if ct_reader.is_ct_enabled(target_table):
-            ct_summary = ct_reader.get_summary(target_table, since)
+            # Use time-windowed aggregation if we have a window start
+            if time_window_start and use_cache:
+                # Aggregate from cache for this time window (FAST!)
+                ct_summary = ct_reader.get_summary(
+                    target_table, 
+                    since=time_window_start,
+                    use_time_window=True  # Enable time-windowed aggregation
+                )
+            else:
+                # First run or no cache - fetch all changes
+                ct_summary = ct_reader.get_summary(
+                    target_table, 
+                    since=since,
+                    use_time_window=False
+                )
+            
             result["ct_total"] = ct_summary.get('total', 0)
             result["ct_inserts"] = ct_summary.get('inserts', 0)
             result["ct_updates"] = ct_summary.get('updates', 0)
             result["ct_deletes"] = ct_summary.get('deletes', 0)
             
             if verbose:
-                print(f"    → ✓ MSSQL CT: {result['ct_total']} entries")
+                from_cache = ct_summary.get('from_cache', False)
+                if from_cache:
+                    print(f"    → ✓ MSSQL CT: {result['ct_total']} entries (from cache)")
+                else:
+                    print(f"    → ✓ MSSQL CT: {result['ct_total']} entries (queried from MSSQL)")
         else:
             result["ct_enabled"] = False
             result["ct_total"] = -1  # Indicates not available
