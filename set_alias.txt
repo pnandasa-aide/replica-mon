@@ -1,0 +1,2 @@
+
+alias monitor="python3 monitor.py --continuous --interval 60"

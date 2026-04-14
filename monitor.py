@@ -431,6 +431,15 @@ def get_entity_comparison(
         result["error"] = str(e)
         import traceback
         result["traceback"] = traceback.format_exc()
+        
+        # Print error details if verbose mode
+        if verbose:
+            print(f"    → ❌ EXCEPTION: {e}")
+            print(f"    → Traceback:")
+            for line in traceback.format_exc().split('\n'):
+                if line.strip():
+                    print(f"      {line}")
+        
         return result
 
 

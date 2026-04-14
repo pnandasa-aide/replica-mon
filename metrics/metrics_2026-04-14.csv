@@ -1,0 +1,4 @@
+timestamp,source_table,target_table,status,journal_inserts,journal_updates,journal_deletes,journal_total,ct_inserts,ct_updates,ct_deletes,ct_total,replication_lag,cache_status,monitoring_interval_sec
+2026-04-14T09:56:34.565395,GSLIBTST.ORDERS,dbo.ORDERS,❌ ERROR,0,0,0,0,0,0,0,0,0,summary,300
+2026-04-14T09:56:34.565395,GSLIBTST.CUSTOMERS,dbo.CUSTOMERS,❌ ERROR,0,60,40,100,0,0,0,0,100,full,300
+2026-04-14T09:56:34.565395,GSLIBTST.CUSTOMERS2,dbo.CUSTOMERS2,❌ ERROR,0,0,0,0,0,0,0,0,0,summary,300
