@@ -4,15 +4,36 @@ import json
 import subprocess
 from typing import Optional
 from .journal_cache import JournalCache
+from .sqlite_ct_cache import SQLiteCTCache
 
 
 class MSSQLCTReader:
     """Read MSSQL Change Tracking data via qadmcli."""
     
-    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh", use_cache: bool = True):
+    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh", use_cache: bool = True, cache_type: str = "sqlite"):
+        """
+        Initialize MSSQL CT reader.
+        
+        Args:
+            qadmcli_path: Path to qadmcli.sh
+            use_cache: Whether to use CT caching (default: True)
+            cache_type: Type of cache to use - "sqlite" (recommended) or "json"
+        """
         self.qadmcli_path = qadmcli_path
         self.use_cache = use_cache
-        self.cache = JournalCache() if use_cache else None
+        
+        if use_cache:
+            if cache_type == "sqlite":
+                # Use new SQLite-based cache (handles binary data, faster)
+                self.cache = SQLiteCTCache(
+                    cache_dir="cache",
+                    retention_days=7
+                )
+            else:
+                # Legacy JSON-based cache (for backward compatibility)
+                self.cache = JournalCache()
+        else:
+            self.cache = None
     
     def _run_qadmcli(self, *args) -> dict:
         """Run qadmcli command and return parsed output."""
@@ -135,27 +156,38 @@ class MSSQLCTReader:
         # Update cache with new changes
         if self.use_cache and self.cache and changes:
             try:
-                # Append new changes to cache
-                # Reuse append_entries but with CT-specific naming
-                cache_table_name = f"CT_{table}"
-                new_count = self.cache.append_entries(
-                    cache_table_name,
-                    changes,
-                    last_timestamp=changes[-1].get('sys_change_timestamp'),
-                    last_sequence=changes[-1].get('sys_change_version', 0)
-                )
-                
-                # Update metadata to mark as full cache
-                meta_path = self.cache._get_metadata_path(cache_table_name)
-                if meta_path.exists():
-                    import json
-                    with open(meta_path, 'r') as f:
-                        metadata = json.load(f)
-                    metadata['cache_level'] = 'full'
-                    with open(meta_path, 'w') as f:
-                        json.dump(metadata, f, indent=2)
-                
-                print(f"  ✓ Cached {new_count} new CT changes (total: {len(changes)})")
+                # Check if this is SQLite cache or JSON cache
+                if hasattr(self.cache, 'store_changes'):
+                    # SQLite cache - use store_changes method
+                    cache_table_name = f"CT_{table}"
+                    new_count = self.cache.store_changes(
+                        cache_table_name,
+                        changes,
+                        last_version=changes[-1].get('sys_change_version', 0),
+                        last_timestamp=changes[-1].get('sys_change_timestamp')
+                    )
+                    print(f"  ✓ Cached {new_count} new CT changes (total: {len(changes)})")
+                else:
+                    # JSON cache - use append_entries method (legacy)
+                    cache_table_name = f"CT_{table}"
+                    new_count = self.cache.append_entries(
+                        cache_table_name,
+                        changes,
+                        last_timestamp=changes[-1].get('sys_change_timestamp'),
+                        last_sequence=changes[-1].get('sys_change_version', 0)
+                    )
+                    
+                    # Update metadata to mark as full cache
+                    meta_path = self.cache._get_metadata_path(cache_table_name)
+                    if meta_path.exists():
+                        import json
+                        with open(meta_path, 'r') as f:
+                            metadata = json.load(f)
+                        metadata['cache_level'] = 'full'
+                        with open(meta_path, 'w') as f:
+                            json.dump(metadata, f, indent=2)
+                    
+                    print(f"  ✓ Cached {new_count} new CT changes (total: {len(changes)})")
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not update CT cache: {e}")
         
@@ -183,20 +215,18 @@ class MSSQLCTReader:
         try:
             # Load cached changes (use CT_ prefix)
             cache_table_name = f"CT_{table}"
-            cache_data = self.cache.load_cache(cache_table_name)
-            changes = cache_data.get('entries', [])
+            
+            # Check if this is SQLite cache or JSON cache
+            if hasattr(self.cache, 'get_changes'):
+                # SQLite cache - use fast indexed query
+                changes = self.cache.get_changes(cache_table_name, since=since)
+            else:
+                # JSON cache - load and filter (legacy)
+                cache_data = self.cache.load_cache(cache_table_name)
+                all_changes = cache_data.get('entries', [])
+                changes = [c for c in all_changes if c.get('sys_change_timestamp', '') >= since]
             
             if not changes:
-                return None
-            
-            # Filter changes by time window
-            window_changes = [
-                c for c in changes
-                if c.get('sys_change_timestamp', '') >= since
-            ]
-            
-            if not window_changes:
-                # No changes in this window
                 return {
                     'table': table,
                     'total': 0,
@@ -207,7 +237,7 @@ class MSSQLCTReader:
                 }
             
             # Aggregate by operation
-            summary = self._count_ct_by_operation(window_changes)
+            summary = self._count_ct_by_operation(changes)
             summary['table'] = table
             summary['from_cache'] = True
             
