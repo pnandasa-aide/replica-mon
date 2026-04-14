@@ -347,10 +347,14 @@ class SQLiteJournalCache:
                 (cutoff_date,)
             )
             deleted = cursor.rowcount
-            
-            if deleted > 0:
-                # Reclaim disk space
+        
+        # VACUUM must be outside transaction
+        if deleted > 0:
+            conn = sqlite3.connect(self.db_path)
+            try:
                 conn.execute("VACUUM")
+            finally:
+                conn.close()
     
     def _to_blob(self, data: Any) -> Optional[bytes]:
         """
