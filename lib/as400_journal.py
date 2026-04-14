@@ -5,22 +5,37 @@ import subprocess
 import re
 from typing import Optional
 from .journal_cache import JournalCache
+from .sqlite_journal_cache import SQLiteJournalCache
 
 
 class AS400JournalReader:
     """Read AS400 journal entries via qadmcli with caching support."""
     
-    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh", use_cache: bool = True):
+    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh", 
+                 use_cache: bool = True, cache_type: str = "sqlite"):
         """
         Initialize AS400 journal reader.
         
         Args:
             qadmcli_path: Path to qadmcli.sh
             use_cache: Whether to use journal caching (default: True)
+            cache_type: Type of cache to use - "sqlite" (recommended) or "json"
         """
         self.qadmcli_path = qadmcli_path
         self.use_cache = use_cache
-        self.cache = JournalCache() if use_cache else None
+        
+        if use_cache:
+            if cache_type == "sqlite":
+                # Use new SQLite-based cache (handles binary data, faster)
+                self.cache = SQLiteJournalCache(
+                    cache_dir="cache",
+                    retention_days=7
+                )
+            else:
+                # Legacy JSON-based cache (for backward compatibility)
+                self.cache = JournalCache()
+        else:
+            self.cache = None
     
     def _run_qadmcli(self, *args) -> dict:
         """Run qadmcli command and return parsed output."""
@@ -183,23 +198,33 @@ class AS400JournalReader:
         # Update cache with new entries
         if self.use_cache and self.cache and entries:
             try:
-                # Append new entries to cache
-                new_count = self.cache.append_entries(
-                    table,
-                    entries,
-                    last_timestamp=entries[-1].get('entry_timestamp'),
-                    last_sequence=entries[-1].get('entry_number', 0)
-                )
-                
-                # Update metadata to mark as full cache
-                meta_path = self.cache._get_metadata_path(table)
-                if meta_path.exists():
-                    import json
-                    with open(meta_path, 'r') as f:
-                        metadata = json.load(f)
-                    metadata['cache_level'] = 'full'
-                    with open(meta_path, 'w') as f:
-                        json.dump(metadata, f, indent=2)
+                # Check if this is SQLite cache or JSON cache
+                if hasattr(self.cache, 'store_entries'):
+                    # SQLite cache - use store_entries method
+                    new_count = self.cache.store_entries(
+                        table,
+                        entries,
+                        last_sequence=entries[-1].get('entry_number', 0),
+                        last_timestamp=entries[-1].get('entry_timestamp')
+                    )
+                else:
+                    # JSON cache - use append_entries method (legacy)
+                    new_count = self.cache.append_entries(
+                        table,
+                        entries,
+                        last_timestamp=entries[-1].get('entry_timestamp'),
+                        last_sequence=entries[-1].get('entry_number', 0)
+                    )
+                    
+                    # Update metadata to mark as full cache
+                    meta_path = self.cache._get_metadata_path(table)
+                    if meta_path.exists():
+                        import json
+                        with open(meta_path, 'r') as f:
+                            metadata = json.load(f)
+                        metadata['cache_level'] = 'full'
+                        with open(meta_path, 'w') as f:
+                            json.dump(metadata, f, indent=2)
                 
                 print(f"  ✓ Cached {new_count} new entries (total: {len(entries)})")
             except Exception as e:
@@ -229,21 +254,17 @@ class AS400JournalReader:
             return None
         
         try:
-            # Load cached entries
-            cache_data = self.cache.load_cache(table)
-            entries = cache_data.get('entries', [])
+            # Check if this is SQLite cache or JSON cache
+            if hasattr(self.cache, 'get_entries'):
+                # SQLite cache - use fast indexed query
+                entries = self.cache.get_entries(table, since=since)
+            else:
+                # JSON cache - load and filter (legacy)
+                cache_data = self.cache.load_cache(table)
+                all_entries = cache_data.get('entries', [])
+                entries = [e for e in all_entries if e.get('entry_timestamp', '') >= since]
             
             if not entries:
-                return None
-            
-            # Filter entries by time window
-            window_entries = [
-                e for e in entries
-                if e.get('entry_timestamp', '') >= since
-            ]
-            
-            if not window_entries:
-                # No entries in this window
                 return {
                     'table': table,
                     'total': 0,
@@ -254,7 +275,7 @@ class AS400JournalReader:
                 }
             
             # Aggregate by type
-            summary = self._count_by_type(window_entries)
+            summary = self._count_by_type(entries)
             summary['table'] = table
             summary['from_cache'] = True
             
