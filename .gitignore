@@ -54,3 +54,4 @@ reports/
 # Temporary files
 tmp/
 temp/
+test_cache*/

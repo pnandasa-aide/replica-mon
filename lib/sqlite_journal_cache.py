@@ -46,7 +46,7 @@ class SQLiteJournalCache:
         self._init_db()
         
         # Auto-cleanup on startup
-        self._cleanup_old_entries()
+        self.cleanup_old_entries()
     
     @contextmanager
     def _get_connection(self):
@@ -337,8 +337,13 @@ class SQLiteJournalCache:
                 conn.execute("DELETE FROM journal_entries")
                 conn.execute("DELETE FROM cache_metadata")
     
-    def _cleanup_old_entries(self):
-        """Remove entries older than retention period."""
+    def cleanup_old_entries(self) -> int:
+        """
+        Remove entries older than retention period.
+        
+        Returns:
+            Number of entries removed
+        """
         cutoff_date = (datetime.now() - timedelta(days=self.retention_days)).isoformat()
         
         with self._get_connection() as conn:
@@ -355,6 +360,8 @@ class SQLiteJournalCache:
                 conn.execute("VACUUM")
             finally:
                 conn.close()
+        
+        return deleted
     
     def _to_blob(self, data: Any) -> Optional[bytes]:
         """
