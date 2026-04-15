@@ -24,6 +24,7 @@ from lib.mssql_ct import MSSQLCTReader
 from lib.comparator import ChangeComparator
 from lib.timezone import get_timezone_info, format_timezone_report, normalize_to_as400_time
 from lib.journal_cache import JournalCache
+from lib.per_entity_tracker import PerEntityTracker
 
 
 def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_path: str = "../qadmcli/qadmcli.sh") -> dict:
@@ -512,7 +513,8 @@ def run_monitoring_cycle(
     show_cache: bool = True,
     verbose: bool = False,
     qadmcli_path: str = "../qadmcli/qadmcli.sh",
-    time_window_start: str = None  # NEW: Start of time window for aggregation
+    time_window_start: str = None,  # NEW: Start of time window for aggregation
+    show_per_entity: bool = True  # NEW: Show per-entity progress report
 ) -> List[Dict]:
     """
     Run one monitoring cycle for all entities.
@@ -557,6 +559,21 @@ def run_monitoring_cycle(
         display_results_json(results)
     else:
         display_results_table(results, show_cache=show_cache)
+    
+    # NEW: Display per-entity progress report
+    if show_per_entity and output_format == "table":
+        # Extract library from first entity (assuming all entities use same library)
+        if entities:
+            first_source = entities[0].get('source', '')
+            if '.' in first_source:
+                library = first_source.split('.')[0]
+                
+                # Initialize per-entity tracker
+                cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+                tracker = PerEntityTracker(cache_dir)
+                
+                # Show report
+                print(tracker.format_per_entity_report(library, time_window_start))
     
     return results
 
@@ -684,6 +701,7 @@ Examples:
     parser.add_argument("--no-cache-status", action="store_true", help="Hide cache status in table")
     parser.add_argument("--no-auto-discover", action="store_true", help="Disable auto-discovery from GlueSync CLI (use entities.json only)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed progress logging")
+    parser.add_argument("--no-per-entity", action="store_true", help="Hide per-entity progress report")
     
     args = parser.parse_args()
     
@@ -702,7 +720,8 @@ Examples:
             output_format=args.format,
             use_cache=not args.no_cache,
             show_cache=not args.no_cache_status,
-            verbose=args.verbose
+            verbose=args.verbose,
+            show_per_entity=not args.no_per_entity
         )
     else:
         results = run_monitoring_cycle(
@@ -711,5 +730,6 @@ Examples:
             output_format=args.format,
             use_cache=not args.no_cache,
             show_cache=not args.no_cache_status,
-            verbose=args.verbose
+            verbose=args.verbose,
+            show_per_entity=not args.no_per_entity
         )
