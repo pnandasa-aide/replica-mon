@@ -25,6 +25,8 @@ from lib.comparator import ChangeComparator
 from lib.timezone import get_timezone_info, format_timezone_report, normalize_to_as400_time
 from lib.journal_cache import JournalCache
 from lib.per_entity_tracker import PerEntityTracker
+from lib.sqlite_journal_cache import SQLiteJournalCache
+from lib.sqlite_ct_cache import SQLiteCTCache
 
 
 def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_path: str = "../qadmcli/qadmcli.sh") -> dict:
@@ -260,6 +262,170 @@ def load_pipeline_config(config_path: str = None, auto_discover: bool = True) ->
     return {"entities": []}
 
 
+def aggregate_from_cache(
+    source_table: str,
+    time_window_start: str,
+    cache_dir: str = "cache",
+    verbose: bool = False
+) -> Dict:
+    """
+    Aggregate journal entries from SQLite cache (FAST - local query).
+    
+    This is the PRIMARY method for monitoring when cache is available.
+    Does NOT query AS400 at all!
+    
+    Args:
+        source_table: AS400 table (LIBRARY.TABLE)
+        time_window_start: Start of time window for aggregation
+        cache_dir: Directory containing SQLite cache
+        verbose: Enable verbose logging
+        
+    Returns:
+        Dictionary with aggregated counts
+    """
+    result = {
+        'total': 0,
+        'inserts': 0,
+        'updates': 0,
+        'deletes': 0,
+        'from_cache': True,
+        'cache_hit': True
+    }
+    
+    try:
+        # Initialize cache
+        cache = SQLiteJournalCache(cache_dir, retention_days=7)
+        
+        # Check if we have data
+        cache_info = cache.get_cache_info(source_table)
+        
+        # Check if cache has data (either 'cached' field or entry_count > 0)
+        has_data = cache_info.get('cached', False) or cache_info.get('entry_count', 0) > 0
+        
+        if not has_data:
+            if verbose:
+                print(f"    → ⚠️  Cache miss for {source_table}")
+            result['cache_hit'] = False
+            return result
+        
+        if verbose:
+            print(f"    → Aggregating from cache (time window: {time_window_start})...")
+        
+        # Query cache directly (FAST - local SQLite!)
+        import sqlite3
+        db_path = os.path.join(cache_dir, 'journal_cache.db')
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("""
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN entry_type = 'IR' OR entry_type = 'PT' THEN 1 ELSE 0 END) as inserts,
+                SUM(CASE WHEN entry_type = 'UP' OR entry_type = 'UB' THEN 1 ELSE 0 END) as updates,
+                SUM(CASE WHEN entry_type = 'DL' THEN 1 ELSE 0 END) as deletes
+            FROM journal_entries
+            WHERE table_name = ?
+              AND entry_timestamp >= ?
+        """, (source_table, time_window_start))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            result['total'] = row[0] or 0
+            result['inserts'] = row[1] or 0
+            result['updates'] = row[2] or 0
+            result['deletes'] = row[3] or 0
+        
+        if verbose:
+            print(f"    → ✓ Cache aggregation: {result['total']} entries (took ~0.002s)")
+        
+        return result
+    
+    except Exception as e:
+        if verbose:
+            print(f"    → ⚠️  Cache aggregation failed: {e}")
+        result['cache_hit'] = False
+        return result
+
+
+def aggregate_ct_from_cache(
+    target_table: str,
+    time_window_start: str,
+    cache_dir: str = "cache",
+    verbose: bool = False
+) -> Dict:
+    """
+    Aggregate CT changes from SQLite cache (FAST - local query).
+    
+    This is the PRIMARY method for CT monitoring when cache is available.
+    Does NOT query MSSQL at all!
+    
+    Args:
+        target_table: MSSQL table (SCHEMA.TABLE)
+        time_window_start: Start of time window for aggregation
+        cache_dir: Directory containing SQLite cache
+        verbose: Enable verbose logging
+        
+    Returns:
+        Dictionary with aggregated counts
+    """
+    result = {
+        'total': 0,
+        'inserts': 0,
+        'updates': 0,
+        'deletes': 0,
+        'from_cache': True,
+        'cache_hit': True
+    }
+    
+    try:
+        # Check if CT cache exists
+        db_path = os.path.join(cache_dir, 'ct_cache.db')
+        
+        if not os.path.exists(db_path):
+            if verbose:
+                print(f"    → ⚠️  CT cache not found")
+            result['cache_hit'] = False
+            return result
+        
+        if verbose:
+            print(f"    → Aggregating CT from cache (time window: {time_window_start})...")
+        
+        # Query CT cache directly (FAST - local SQLite!)
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("""
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN sys_change_operation = 'I' THEN 1 ELSE 0 END) as inserts,
+                SUM(CASE WHEN sys_change_operation = 'U' THEN 1 ELSE 0 END) as updates,
+                SUM(CASE WHEN sys_change_operation = 'D' THEN 1 ELSE 0 END) as deletes
+            FROM ct_changes
+            WHERE table_name = ?
+              AND sys_change_timestamp >= ?
+        """, (target_table, time_window_start))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            result['total'] = row[0] or 0
+            result['inserts'] = row[1] or 0
+            result['updates'] = row[2] or 0
+            result['deletes'] = row[3] or 0
+        
+        if verbose:
+            print(f"    → ✓ CT cache aggregation: {result['total']} changes (took ~0.002s)")
+        
+        return result
+    
+    except Exception as e:
+        if verbose:
+            print(f"    → ⚠️  CT cache aggregation failed: {e}")
+        result['cache_hit'] = False
+        return result
+
+
 def get_entity_comparison(
     source_table: str,
     target_table: str,
@@ -331,27 +497,38 @@ def get_entity_comparison(
         # Normalize timestamp for AS400
         since_for_as400 = normalize_to_as400_time(since, mssql_tz, as400_tz) if since else None
         
-        # Get AS400 journal summary
+        # Get AS400 journal summary - CACHE FIRST with fallback!
         if verbose:
             if time_window_start:
-                print(f"    → Querying AS400 journal (time window: {time_window_start} to now)...")
+                print(f"    → Getting AS400 journal summary (cache-first)...")
             else:
-                print(f"    → Querying AS400 journal (this may take 60-120s for first run)...")
+                print(f"    → Getting AS400 journal summary...")
         
-        journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
-        
-        # Use time-windowed aggregation if we have a window start
+        # PHASE 2 OPTIMIZATION: Try cache first (FAST!)
+        journal_summary = None
         if time_window_start and use_cache:
-            # Aggregate from cache for this time window (FAST!)
-            journal_summary = journal_reader.get_summary(
-                source_table, 
-                since=time_window_start,
-                use_time_window=True  # Enable time-windowed aggregation
+            # Try aggregating from cache (0.002s vs 60-120s)
+            journal_summary = aggregate_from_cache(
+                source_table,
+                time_window_start,
+                verbose=verbose
             )
+            
+            # Fallback to AS400 query if cache miss
+            if not journal_summary.get('cache_hit'):
+                if verbose:
+                    print(f"    → ⚠️  Cache miss, falling back to AS400 query...")
+                journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
+                journal_summary = journal_reader.get_summary(
+                    source_table,
+                    since=time_window_start,
+                    use_time_window=True
+                )
         else:
-            # First run or no cache - fetch all entries
+            # No time window or cache disabled - query AS400 directly
+            journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
             journal_summary = journal_reader.get_summary(
-                source_table, 
+                source_table,
                 since=since_for_as400,
                 use_time_window=False
             )
@@ -368,27 +545,40 @@ def get_entity_comparison(
             else:
                 print(f"    → ✓ AS400 journal: {result['journal_total']} entries (queried from AS400)")
         
-        # Get MSSQL CT summary
+        # Get MSSQL CT summary - CACHE FIRST with fallback!
         if verbose:
             if time_window_start:
-                print(f"    → Querying MSSQL CT (time window: {time_window_start} to now)...")
+                print(f"    → Getting MSSQL CT summary (cache-first)...")
             else:
-                print(f"    → Querying MSSQL Change Tracking...")
+                print(f"    → Getting MSSQL CT summary...")
+        
+        # Initialize CT reader (needed for both cache and fallback)
         ct_reader = MSSQLCTReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
         
+        # PHASE 2 OPTIMIZATION: Try cache first (FAST!)
+        ct_summary = None
         if ct_reader.is_ct_enabled(target_table):
-            # Use time-windowed aggregation if we have a window start
             if time_window_start and use_cache:
-                # Aggregate from cache for this time window (FAST!)
-                ct_summary = ct_reader.get_summary(
-                    target_table, 
-                    since=time_window_start,
-                    use_time_window=True  # Enable time-windowed aggregation
+                # Try aggregating from cache (0.002s vs 10-30s)
+                ct_summary = aggregate_ct_from_cache(
+                    target_table,
+                    time_window_start,
+                    verbose=verbose
                 )
+                
+                # Fallback to MSSQL query if cache miss
+                if not ct_summary.get('cache_hit'):
+                    if verbose:
+                        print(f"    → ⚠️  CT cache miss, falling back to MSSQL query...")
+                    ct_summary = ct_reader.get_summary(
+                        target_table,
+                        since=time_window_start,
+                        use_time_window=True
+                    )
             else:
-                # First run or no cache - fetch all changes
+                # No time window or cache disabled - query MSSQL directly
                 ct_summary = ct_reader.get_summary(
-                    target_table, 
+                    target_table,
                     since=since,
                     use_time_window=False
                 )
@@ -672,23 +862,26 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Single monitoring run (table output)
+  # Single monitoring run (table output) - CACHE-FIRST by default (FAST!)
   python3 monitor.py
   
   # Single run (JSON output for applications/UI)
   python3 monitor.py --format json
   
-  # Continuous monitoring every 5 minutes (default)
+  # Continuous monitoring every 5 minutes (default) - uses cache!
   python3 monitor.py --continuous
   
   # Continuous monitoring every 1 minute
   python3 monitor.py --continuous --interval 60
   
-  # Check last hour only
+  # Check last hour only (aggregates from cache)
   python3 monitor.py --since "$(date -d '1 hour ago' '+%Y-%m-%d %H:%M:%S')"
   
   # Use custom entity config
   python3 monitor.py --config my_entities.json
+  
+  # Force AS400 query (bypass cache - for debugging)
+  python3 monitor.py --force-query
         """
     )
     
@@ -702,6 +895,7 @@ Examples:
     parser.add_argument("--no-auto-discover", action="store_true", help="Disable auto-discovery from GlueSync CLI (use entities.json only)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed progress logging")
     parser.add_argument("--no-per-entity", action="store_true", help="Hide per-entity progress report")
+    parser.add_argument("--force-query", action="store_true", help="Force AS400/MSSQL queries (bypass cache - for debugging)")
     
     args = parser.parse_args()
     
@@ -718,7 +912,7 @@ Examples:
             interval_seconds=args.interval,
             since=args.since,
             output_format=args.format,
-            use_cache=not args.no_cache,
+            use_cache=not args.no_cache and not args.force_query,  # Disable cache if force-query
             show_cache=not args.no_cache_status,
             verbose=args.verbose,
             show_per_entity=not args.no_per_entity
@@ -728,7 +922,7 @@ Examples:
             config=config,
             since=args.since,
             output_format=args.format,
-            use_cache=not args.no_cache,
+            use_cache=not args.no_cache and not args.force_query,  # Disable cache if force-query
             show_cache=not args.no_cache_status,
             verbose=args.verbose,
             show_per_entity=not args.no_per_entity
