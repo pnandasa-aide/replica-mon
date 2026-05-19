@@ -12,7 +12,7 @@ ReplicaMon validates that GlueSync replication is working correctly by:
 ## Prerequisites
 
 - **qadmcli** - Must be installed and configured for AS400 and MSSQL connections
-- **gluesync-cli** - For entity mapping (optional)
+- **replica-cli** - For entity mapping (optional)
 - Python 3.8+
 - Environment variables configured (see `.env` file)
 
@@ -40,25 +40,28 @@ MSSQL_ADMIN_PASSWORD=your_mssql_admin_password
 
 ### 1. Automated Monitoring (Recommended)
 
-Monitor all GlueSync entities automatically with intelligent caching:
+Monitor all GlueSync entities automatically with intelligent caching. The tool is fully containerized and will automatically build its Docker/Podman image on first run:
 
 ```bash
 cd ~/_qoder/replica-mon
 
 # Single check (auto-discovers entities from GlueSync)
-python3 monitor.py
+./replica-mon.sh
 
 # Continuous monitoring every 5 minutes
-python3 monitor.py --continuous
+./replica-mon.sh --continuous
 
 # Continuous monitoring every 1 minute
-python3 monitor.py --continuous --interval 60
+./replica-mon.sh --continuous --interval 60
 
 # JSON output (for dashboards/APIs)
-python3 monitor.py --format json
+./replica-mon.sh --format json
 
 # Check last hour only
-python3 monitor.py --since "$(date -d '1 hour ago' '+%Y-%m-%d %H:%M:%S')"
+./replica-mon.sh --since "$(date -d '1 hour ago' '+%Y-%m-%d %H:%M:%S')"
+
+# Force rebuild the container image (e.g. if qadmcli or dependencies were updated)
+./replica-mon.sh --rebuild
 ```
 
 **Sample Output:**
@@ -92,19 +95,19 @@ Summary: 3 OK, 0 Issues, 0 Flagged for Attention
 
 ### 2. Single Table Comparison (Manual)
 
-For detailed comparison of a specific table:
+For detailed comparison of a specific table, you can invoke `compare.py` through the container:
 
 ```bash
 cd ~/_qoder/replica-mon
 
 # Text format (human-readable)
-python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS
+./replica-mon.sh python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS
 
 # JSON format (for automation)
-python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS --format json
+./replica-mon.sh python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS --format json
 
 # Filter by timestamp
-python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS --since "2026-04-10 01:00:00"
+./replica-mon.sh python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS --since "2026-04-10 01:00:00"
 ```
 
 ### 2. Sample Output
@@ -169,6 +172,45 @@ TOTAL                          50              50           +0         ✅
 }
 ```
 
+## Configuration & Auto-Discovery
+
+`monitor.py` operates at the **table level** (referred to as "entities" in GlueSync terminology). It queries AS400 journals and MSSQL Change Tracking specifically for configured table pairs.
+
+### 1. Auto-Discovery (Default)
+
+By default, `monitor.py` automatically pulls your active replication entities from the **`replica-cli`** tool. 
+
+Behind the scenes, it looks for the `gluesync_cli_v2.py` script in the parent directory (e.g., `../replica-cli/gluesync_cli_v2.py`). It silently executes commands like `python3 gluesync_cli_v2.py --output json get pipelines` to identify your pipeline, and then queries the active entities within it. It extracts the AS400 source tables and MSSQL target tables, and saves this dynamically generated configuration into a local **`entities.json`** file.
+
+### 2. Manual Configuration
+
+If you prefer to explicitly define the tables to monitor (or if `gluesync-cli` is not available), you can create your own `entities.json` file:
+
+```json
+{
+  "pipeline": "custom_pipeline",
+  "entities": [
+    {
+      "source": "GSLIBTST.ORDERS",
+      "target": "dbo.ORDERS",
+      "status": "active"
+    },
+    {
+      "source": "GSLIBTST.CUSTOMERS",
+      "target": "dbo.CUSTOMERS",
+      "status": "active"
+    }
+  ]
+}
+```
+*(Note: `monitor.py` only monitors entities where `"status"` is set to `"active"`).*
+
+You can also point the script to a specific custom configuration file and disable auto-discovery:
+
+```bash
+./replica-mon.sh --config custom_tables.json --no-auto-discover
+```
+
 ## Advanced Usage
 
 ### Cache Management
@@ -177,25 +219,25 @@ ReplicaMon uses intelligent tiered caching for fast performance:
 
 ```bash
 # View cache status for all tables
-python3 compare.py --cache-info
+./replica-mon.sh python3 compare.py --cache-info
 
 # View cache for specific table
-python3 compare.py --cache-info --source GSLIBTST.CUSTOMERS
+./replica-mon.sh python3 compare.py --cache-info --source GSLIBTST.CUSTOMERS
 
 # Clear all caches
-python3 compare.py --clear-cache
+./replica-mon.sh python3 compare.py --clear-cache
 
 # Clear cache for specific table
-python3 compare.py --clear-cache --source GSLIBTST.CUSTOMERS
+./replica-mon.sh python3 compare.py --clear-cache --source GSLIBTST.CUSTOMERS
 
 # List tables requiring attention (discrepancies detected)
-python3 compare.py --list-attention
+./replica-mon.sh python3 compare.py --list-attention
 
 # Reset attention flag for a table
-python3 compare.py --reset-attention --source GSLIBTST.CUSTOMERS
+./replica-mon.sh python3 compare.py --reset-attention --source GSLIBTST.CUSTOMERS
 
 # Disable caching (always query AS400)
-python3 monitor.py --no-cache
+./replica-mon.sh --no-cache
 ```
 
 ### How Caching Works
@@ -221,14 +263,14 @@ python3 monitor.py --no-cache
 ### Monitoring Workflow
 
 ```bash
-# Start continuous monitoring (runs in background)
-python3 monitor.py --continuous --interval 300 &
+# Start continuous monitoring (runs in background via Podman detached or nohup)
+nohup ./replica-mon.sh --continuous --interval 300 > replica.log 2>&1 &
 
 # Check status anytime
-python3 monitor.py --format json | python3 -m json.tool
+./replica-mon.sh --format json | python3 -m json.tool
 
 # View flagged tables
-python3 compare.py --list-attention
+./replica-mon.sh python3 compare.py --list-attention
 
 # Stop monitoring
 kill %1  # or find PID and kill
@@ -402,7 +444,7 @@ This indicates 2 INSERT operations were not replicated to MSSQL.
 ```bash
 # Add to crontab
 0 * * * * cd /home/ubuntu/_qoder/replica-mon && \
-  python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS \
+  ./replica-mon.sh python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS \
   --format json >> /var/log/replica-mon/hourly_check.json 2>&1
 ```
 
@@ -412,7 +454,7 @@ This indicates 2 INSERT operations were not replicated to MSSQL.
 #!/bin/bash
 # check_replication.sh
 
-RESULT=$(python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS --format json)
+RESULT=$(cd /home/ubuntu/_qoder/replica-mon && ./replica-mon.sh python3 compare.py --source GSLIBTST.CUSTOMERS --target dbo.CUSTOMERS --format json)
 MATCH=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['comparison']['match'])")
 
 if [ "$MATCH" = "False" ]; then
@@ -480,6 +522,12 @@ Test qadmcli connections:
 This project follows standard Git workflow practices. See [`GIT_WORKFLOW.md`](../GIT_WORKFLOW.md) for details.
 
 ### Recent Changes
+
+- **v0.4.0** - Dockerization & Documentation Cleanup
+  - Introduced `Containerfile` and `podman-compose.yaml` to containerize the monitoring tool natively.
+  - Added `replica-mon.sh` wrapper script for streamlined execution.
+  - Added `--rebuild` flag to dynamically update containerized dependencies.
+  - Consolidated extensive documentation into an `archive/` folder.
 
 - **v0.3.0** - Automated monitoring with auto-discovery
   - Added monitor.py for continuous entity monitoring

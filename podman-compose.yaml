@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  replica-mon:
+    image: localhost/replica-mon:latest
+    container_name: replica-mon
+    # network_mode: host is required so the container can reach:
+    #   - GlueSync Core Hub at localhost:1717
+    #   - Prometheus at localhost:9090
+    # Note: with host networking, 'ports:' is not used — the container
+    #       binds directly to host ports (FastAPI → port 8000)
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      - QADMCLI_PATH=qadmcli
+      - PROMETHEUS_URL=http://localhost:9090
+    volumes:
+      # SQLite journal/CT cache (legacy monitor.py)
+      - ./cache:/app/replica-mon/cache:Z
+      # SQLite WebSocket metrics time-series store (new)
+      - ./metrics:/app/replica-mon/metrics:Z
+    restart: unless-stopped

@@ -31,6 +31,11 @@ from lib.journal_cache import JournalCache
 
 def detect_qadmcli_path() -> str:
     """Auto-detect qadmcli.sh path."""
+    # Check env var first
+    env_path = os.environ.get("QADMCLI_PATH")
+    if env_path:
+        return env_path
+        
     # Try relative to this script (replica-mon/ -> _qoder/ -> qadmcli/)
     script_dir = Path(__file__).parent
     base_dir = script_dir.parent

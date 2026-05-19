@@ -1,5 +1,6 @@
 """MSSQL Change Tracking reader."""
 
+import os
 import json
 import subprocess
 from typing import Optional
@@ -10,7 +11,7 @@ from .sqlite_ct_cache import SQLiteCTCache
 class MSSQLCTReader:
     """Read MSSQL Change Tracking data via qadmcli."""
     
-    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh", use_cache: bool = True, cache_type: str = "sqlite"):
+    def __init__(self, qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh"), use_cache: bool = True, cache_type: str = "sqlite"):
         """
         Initialize MSSQL CT reader.
         

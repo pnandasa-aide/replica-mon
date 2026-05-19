@@ -13,11 +13,72 @@ from datetime import datetime
 # Configuration
 QADMCLI_PATH = "../qadmcli/qadmcli.sh"
 
-TABLES = [
+DEFAULT_TABLES = [
     {"library": "GSLIBTST", "table": "ORDERS"},
     {"library": "GSLIBTST", "table": "CUSTOMERS"},
     {"library": "GSLIBTST", "table": "CUSTOMERS2"},
 ]
+
+def get_dynamic_entities():
+    """Try to get entities dynamically from replica-cli"""
+    import os
+    cli_path = os.environ.get("REPLICA_CLI_PATH") or os.environ.get("GLUESYNC_CLI_PATH") or "../replica-cli/gluesync_cli_v2.py"
+    if not os.path.exists(cli_path):
+        return None
+        
+    print("  🔍 Attempting to fetch entities dynamically from GlueSync...")
+    try:
+        # Get pipelines
+        result = subprocess.run(["python3", cli_path, "-o", "json", "get", "pipelines"], 
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            print("  ⚠️  Failed to connect to GlueSync, falling back to default tables.")
+            return None
+            
+        pipelines = json.loads(result.stdout.strip())
+        if not pipelines:
+            return None
+            
+        pipeline_id = pipelines[0].get('id')
+        if not pipeline_id:
+            return None
+            
+        # Get entities
+        result = subprocess.run(["python3", cli_path, "-o", "json", "get", "entities", "-p", pipeline_id], 
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return None
+            
+        entities = json.loads(result.stdout.strip())
+        tables = []
+        for e in entities:
+            # Extract actual source table from agentEntities
+            source_table = None
+            for ae in e.get('agentEntities', []):
+                if ae.get('entityType', {}).get('type') == 'Source':
+                    table_info = ae.get('table', {})
+                    schema = table_info.get('schema', '')
+                    name = table_info.get('name', '')
+                    if schema and name:
+                        source_table = f"{schema}.{name}"
+                    break
+            
+            # Fallback to entityName if agentEntities didn't have it
+            if not source_table:
+                source_table = e.get('entityName')
+                
+            if source_table and '.' in source_table:
+                lib, tbl = source_table.split('.', 1)
+                tables.append({"library": lib, "table": tbl})
+                
+        if tables:
+            print(f"  ✓ Found {len(tables)} entities in GlueSync")
+            return tables
+            
+    except Exception as e:
+        print(f"  ⚠️  Failed to fetch dynamic entities: {e}")
+        
+    return None
 
 def run_qadmcli(args, timeout=30):
     """Run qadmcli command and return output."""
@@ -204,11 +265,14 @@ def main():
         print("Use: insert, update, delete, or all")
         sys.exit(1)
     
+    # Get tables dynamically or fallback to default
+    tables_to_process = get_dynamic_entities() or DEFAULT_TABLES
+    
     # Generate traffic for each table
-    total_tables = len(TABLES)
+    total_tables = len(tables_to_process)
     successful_tables = 0
     
-    for i, table_info in enumerate(TABLES, 1):
+    for i, table_info in enumerate(tables_to_process, 1):
         library = table_info["library"]
         table = table_info["table"]
         

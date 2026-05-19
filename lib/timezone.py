@@ -5,6 +5,7 @@ AS400 uses UTC+0, MSSQL uses UTC+7 (Asia/Bangkok).
 This module provides automatic detection and conversion.
 """
 
+import os
 import subprocess
 import json
 import re
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 
-def detect_as400_timezone(qadmcli_path: str = "../qadmcli/qadmcli.sh") -> int:
+def detect_as400_timezone(qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh")) -> int:
     """
     Detect AS400 timezone offset from UTC.
     
@@ -42,7 +43,7 @@ def detect_as400_timezone(qadmcli_path: str = "../qadmcli/qadmcli.sh") -> int:
         return 0  # Default to UTC on error
 
 
-def detect_mssql_timezone(qadmcli_path: str = "../qadmcli/qadmcli.sh") -> int:
+def detect_mssql_timezone(qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh")) -> int:
     """
     Detect MSSQL timezone offset from UTC.
     
@@ -142,7 +143,7 @@ def normalize_to_mssql_time(
     return convert_timestamp(timestamp, as400_tz_offset, mssql_tz_offset)
 
 
-def get_timezone_info(qadmcli_path: str = "../qadmcli/qadmcli.sh") -> dict:
+def get_timezone_info(qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh")) -> dict:
     """
     Get comprehensive timezone information for all systems.
     

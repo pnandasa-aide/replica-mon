@@ -30,8 +30,8 @@ set -e  # Exit on error
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QADMCLI_DIR="$SCRIPT_DIR/../qadmcli"
-GLUESYNC_DIR="$SCRIPT_DIR/../gluesync-cli"
+QADMCLI_DIR="${QADMCLI_DIR:-$SCRIPT_DIR/../qadmcli}"
+GLUESYNC_DIR="${REPLICA_CLI_DIR:-${GLUESYNC_CLI_DIR:-$SCRIPT_DIR/../replica-cli}}"
 REPLICA_DIR="$SCRIPT_DIR"
 ENV_FILE="$SCRIPT_DIR/../.env"
 
@@ -90,15 +90,15 @@ else
     log_success "qadmcli found: $QADMCLI_DIR/qadmcli.sh"
 fi
 
-# Check gluesync-cli
+# Check replica-cli
 if [ ! -d "$GLUESYNC_DIR" ]; then
-    log_error "gluesync-cli directory not found: $GLUESYNC_DIR"
+    log_error "replica-cli directory not found: $GLUESYNC_DIR"
     VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
 elif [ ! -f "$GLUESYNC_DIR/gluesync_cli_v2.py" ]; then
     log_error "gluesync_cli_v2.py not found in $GLUESYNC_DIR"
     VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
 else
-    log_success "gluesync-cli found: $GLUESYNC_DIR/gluesync_cli_v2.py"
+    log_success "replica-cli found: $GLUESYNC_DIR/gluesync_cli_v2.py"
 fi
 
 # Check replica-mon

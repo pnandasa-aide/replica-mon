@@ -51,7 +51,7 @@ class JournalFeeder:
     
     def __init__(
         self,
-        qadmcli_path: str = "../qadmcli/qadmcli.sh",
+        qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh"),
         cache_dir: str = "cache",
         poll_interval: int = 300,
         retention_days: int = 7

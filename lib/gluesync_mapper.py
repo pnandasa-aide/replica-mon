@@ -8,8 +8,9 @@ from typing import Optional
 class GlueSyncMapper:
     """Get entity source/target mapping from GlueSync."""
     
-    def __init__(self, gluesync_cli: str = "../gluesync-cli/gluesync_cli_v2.py"):
-        self.gluesync_cli = gluesync_cli
+    def __init__(self, gluesync_cli: Optional[str] = None):
+        import os
+        self.gluesync_cli = gluesync_cli or os.environ.get("REPLICA_CLI_PATH") or os.environ.get("GLUESYNC_CLI_PATH") or "../replica-cli/gluesync_cli_v2.py"
     
     def _run_gluesync(self, *args) -> dict:
         """Run gluesync-cli command and return parsed output."""
@@ -39,27 +40,48 @@ class GlueSyncMapper:
         Returns:
             Dict with 'source', 'target', 'pk_column', etc.
         """
-        # Get entity details from gluesync-cli
+        # Get entity details from gluesync-cli (with --output json at the top-level)
         result = self._run_gluesync(
+            "--output", "json",
             "get", "entity", entity_id,
-            "--pipeline", pipeline_id,
-            "--output", "json"
+            "--pipeline", pipeline_id
         )
         
-        if not result.get('success', True) and 'error' in result:
+        if isinstance(result, dict) and not result.get('success', True) and 'error' in result:
             raise RuntimeError(f"gluesync-cli failed: {result.get('error')}")
         
         # Parse entity configuration
-        entity_data = result if 'source' not in result else result
+        entity_data = result
         
         # Extract source and target from entity config
-        # This is a simplified version - actual parsing depends on gluesync-cli output format
         source = entity_data.get('source', '')
         target = entity_data.get('target', '')
-        pk_column = entity_data.get('pk_column', 'ID')
+        pk_column = entity_data.get('pk_column', '')
         
+        # Fallback to parsing the raw GlueSync API entity payload
         if not source or not target:
-            raise ValueError(f"Could not determine source/target for entity {entity_id}")
+            agent_entities = entity_data.get('agentEntities', [])
+            for ae in agent_entities:
+                ae_type = ae.get('entityType', {}).get('type')
+                table = ae.get('table', {})
+                schema = table.get('schema', '')
+                name = table.get('name', '')
+                full_table = f"{schema}.{name}" if schema else name
+                
+                if ae_type == 'Source':
+                    source = full_table
+                elif ae_type == 'Target':
+                    target = full_table
+                    # Try to extract the first primary key column name
+                    keys = ae.get('keys', [])
+                    if keys:
+                        pk_column = keys[0].get('name', '')
+                        
+        if not pk_column:
+            pk_column = 'ID'
+            
+        if not source or not target:
+            raise ValueError(f"Could not determine source/target for entity {entity_id}. Raw config: {entity_data}")
         
         return {
             'pipeline_id': pipeline_id,

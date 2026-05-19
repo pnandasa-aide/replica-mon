@@ -1,0 +1,4 @@
+curl -s http://localhost:9090/prometheus/api/v1/targets | jq -r '
+  .data.activeTargets[] | 
+  "\(.labels.job)  \(.labels.instance)  →  \(.health)"
+'

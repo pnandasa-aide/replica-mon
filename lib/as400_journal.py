@@ -1,5 +1,6 @@
 """AS400 journal reader (wraps qadmcli container)."""
 
+import os
 import json
 import subprocess
 import re
@@ -11,7 +12,7 @@ from .sqlite_journal_cache import SQLiteJournalCache
 class AS400JournalReader:
     """Read AS400 journal entries via qadmcli with caching support."""
     
-    def __init__(self, qadmcli_path: str = "../qadmcli/qadmcli.sh", 
+    def __init__(self, qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh"), 
                  use_cache: bool = True, cache_type: str = "sqlite"):
         """
         Initialize AS400 journal reader.

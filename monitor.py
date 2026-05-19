@@ -29,7 +29,7 @@ from lib.sqlite_journal_cache import SQLiteJournalCache
 from lib.sqlite_ct_cache import SQLiteCTCache
 
 
-def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_path: str = "../qadmcli/qadmcli.sh") -> dict:
+def check_entity_prerequisites(source_table: str, target_table: str, qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh")) -> dict:
     """
     Check if entity has proper prerequisites (journal on AS400, CT on MSSQL).
     
@@ -108,15 +108,17 @@ def discover_entities_from_gluesync(gluesync_cli_path: str = None) -> Dict:
     Auto-discover entities from GlueSync CLI.
     
     Args:
-        gluesync_cli_path: Path to gluesync_cli.py
+        gluesync_cli_path: Path to gluesync_cli_v2.py
         
     Returns:
         Dictionary with pipeline and entity information
     """
     if gluesync_cli_path is None:
-        # Auto-detect gluesync-cli location
-        script_dir = Path(__file__).parent.parent
-        gluesync_cli_path = script_dir / "gluesync-cli" / "gluesync_cli.py"
+        # Auto-detect gluesync-cli location using environment override
+        gluesync_cli_path = os.environ.get("REPLICA_CLI_PATH") or os.environ.get("GLUESYNC_CLI_PATH")
+        if not gluesync_cli_path:
+            script_dir = Path(__file__).parent.parent
+            gluesync_cli_path = script_dir / "replica-cli" / "gluesync_cli_v2.py"
     
     if not os.path.exists(gluesync_cli_path):
         print(f"  ⚠️  GlueSync CLI not found at: {gluesync_cli_path}")
@@ -124,9 +126,9 @@ def discover_entities_from_gluesync(gluesync_cli_path: str = None) -> Dict:
         return None
     
     try:
-        # Step 1: Get pipeline list
+        # Step 1: Get pipeline list (using v2 API CLI commands)
         result = subprocess.run(
-            ["python3", str(gluesync_cli_path), "-o", "json", "pipeline", "list"],
+            ["python3", str(gluesync_cli_path), "--output", "json", "get", "pipelines"],
             capture_output=True,
             text=True,
             timeout=15
@@ -153,9 +155,9 @@ def discover_entities_from_gluesync(gluesync_cli_path: str = None) -> Dict:
         
         print(f"  📡 Discovered pipeline: {pipeline_name} ({pipeline_id})")
         
-        # Step 2: Get entities for this pipeline
+        # Step 2: Get entities for this pipeline (using v2 API CLI commands)
         result = subprocess.run(
-            ["python3", str(gluesync_cli_path), "-o", "json", "entity", "list", pipeline_id],
+            ["python3", str(gluesync_cli_path), "--output", "json", "get", "entities", "--pipeline", pipeline_id],
             capture_output=True,
             text=True,
             timeout=15
@@ -174,15 +176,21 @@ def discover_entities_from_gluesync(gluesync_cli_path: str = None) -> Dict:
             entity_id = entity.get('entityId', '')
             status = entity.get('status', 'unknown')
             
-            # Parse AS400 table name (format: LIBRARY.TABLE)
-            source_table = entity_name
+            # Extract actual source and target tables from agentEntities
+            source_table = entity_name  # fallback
+            target_table = f"dbo.{entity_name.split('.')[-1]}"  # fallback
             
-            # Generate target table name (replace library with dbo)
-            parts = entity_name.split('.')
-            if len(parts) == 2:
-                target_table = f"dbo.{parts[1]}"
-            else:
-                target_table = f"dbo.{entity_name}"
+            for ae in entity.get('agentEntities', []):
+                ae_type = ae.get('entityType', {}).get('type')
+                table_info = ae.get('table', {})
+                schema = table_info.get('schema', '')
+                name = table_info.get('name', '')
+                full_table = f"{schema}.{name}" if schema else name
+                
+                if ae_type == 'Source':
+                    source_table = full_table
+                elif ae_type == 'Target':
+                    target_table = full_table
             
             entities.append({
                 "entityId": entity_id,
@@ -431,7 +439,7 @@ def get_entity_comparison(
     target_table: str,
     since: str = None,
     use_cache: bool = True,
-    qadmcli_path: str = "../qadmcli/qadmcli.sh",
+    qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh"),
     verbose: bool = False,
     time_window_start: str = None  # NEW: Start of time window for delta counting
 ) -> Dict:
@@ -702,7 +710,7 @@ def run_monitoring_cycle(
     use_cache: bool = True,
     show_cache: bool = True,
     verbose: bool = False,
-    qadmcli_path: str = "../qadmcli/qadmcli.sh",
+    qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh"),
     time_window_start: str = None,  # NEW: Start of time window for aggregation
     show_per_entity: bool = True  # NEW: Show per-entity progress report
 ) -> List[Dict]:
@@ -776,7 +784,7 @@ def run_continuous_monitoring(
     use_cache: bool = True,
     show_cache: bool = True,
     verbose: bool = False,
-    qadmcli_path: str = "../qadmcli/qadmcli.sh"
+    qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh")
 ):
     """
     Run monitoring in continuous loop.
