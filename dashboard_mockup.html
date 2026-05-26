@@ -24,6 +24,7 @@
             --radius: 8px;
             --radius-lg: 12px;
             --transition: all 0.2s ease;
+            --bg-card: #1e293b;
         }
 
         /* Config Badges */
@@ -349,6 +350,7 @@
             --border-color: #e2e8f0;
             --accent-blue: #2563eb;
             --accent-blue-hover: #1d4ed8;
+            --bg-card: #ffffff;
         }
         
         [data-theme="light"] .entity-name { color: var(--text-primary); }
@@ -658,6 +660,44 @@
             background: var(--accent-blue);
             color: #fff;
             font-weight: 600;
+        }
+        
+        /* Settings Modal Light Theme Adjustments */
+        [data-theme="light"] .modal-card {
+            background: #ffffff !important;
+            border-color: #e2e8f0 !important;
+        }
+        [data-theme="light"] .modal-header {
+            border-bottom-color: #e2e8f0 !important;
+        }
+        [data-theme="light"] .side-tab-btn {
+            color: #475569 !important;
+        }
+        [data-theme="light"] .side-tab-btn:hover {
+            background: rgba(0, 0, 0, 0.05) !important;
+            color: var(--text-primary) !important;
+        }
+        [data-theme="light"] .side-tab-btn.active {
+            background: var(--accent-blue) !important;
+            color: #ffffff !important;
+        }
+        [data-theme="light"] .modal-body input,
+        [data-theme="light"] .modal-body select,
+        [data-theme="light"] .modal-body textarea {
+            background: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+            color: #0f172a !important;
+        }
+        [data-theme="light"] .modal-body select option {
+            background: #ffffff !important;
+            color: #0f172a !important;
+        }
+        [data-theme="light"] .settings-tab-panel {
+            background: #ffffff !important;
+            color: #0f172a !important;
+        }
+        [data-theme="light"] .modal-body div {
+            border-color: #e2e8f0 !important;
         }
         .settings-tab-panel.hidden {
             display: none !important;

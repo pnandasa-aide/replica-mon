@@ -142,7 +142,7 @@ def init_metrics_db():
     # Set default global log path
     conn.execute("""
         INSERT OR IGNORE INTO scheduler_settings (key, value)
-        VALUES ('log_path', '/app/replica-mon/cache/scheduler.log')
+        VALUES ('log_path', '/app/replica-mon/logs/scheduler.log')
     """)
 
     # Auto-cleanup: keep last 30 days
@@ -2101,7 +2101,7 @@ def execute_scheduler_job(job: dict, log_path: str):
 
 def run_scheduled_jobs():
     dt = datetime.now()
-    log_path = "/app/replica-mon/cache/scheduler.log"
+    log_path = "/app/replica-mon/logs/scheduler.log"
     try:
         conn = sqlite3.connect(METRICS_DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -2297,7 +2297,7 @@ def get_scheduler_logs(lines: int = 50):
     try:
         conn = get_db()
         row = conn.execute("SELECT value FROM scheduler_settings WHERE key = 'log_path'").fetchone()
-        log_path = row['value'] if row else "/app/replica-mon/cache/scheduler.log"
+        log_path = row['value'] if row else "/app/replica-mon/logs/scheduler.log"
         if not os.path.exists(log_path):
             return []
         with open(log_path, 'r', encoding='utf-8') as f:

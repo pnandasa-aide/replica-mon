@@ -21,6 +21,8 @@ services:
       - ./cache:/app/replica-mon/cache:Z
       # SQLite WebSocket metrics time-series store (new)
       - ./metrics:/app/replica-mon/metrics:Z
+      # Scheduler and app logs
+      - ./logs:/app/replica-mon/logs:Z
       # Saved static HTML reports
       - ./compare/reports:/app/replica-mon/compare/reports:Z
       # Static HTML files (live editing without rebuild)
