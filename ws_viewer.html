@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Live Stream Console</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #090d16;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --accent: #10b981; /* terminal green */
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header */
+        header {
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .title-group h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .pulse-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #6b7280;
+        }
+        
+        .pulse-indicator.connected {
+            background-color: var(--accent);
+            box-shadow: 0 0 12px var(--accent);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.5; }
+        }
+
+        /* Layout Grid */
+        .workspace {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sidebar (Controls) */
+        .sidebar {
+            background-color: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            overflow-y: auto;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+
+        select, input, textarea {
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            padding: 0.75rem;
+            font-family: inherit;
+            font-size: 0.875rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        select:focus, input:focus, textarea:focus {
+            border-color: var(--accent-blue);
+        }
+
+        .btn {
+            border: none;
+            border-radius: 6px;
+            padding: 0.75rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn-connect {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+
+        .btn-disconnect {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+            display: none;
+        }
+
+        /* Terminal Console (Logs) */
+        .console-container {
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        .toolbar {
+            background-color: rgba(255, 255, 255, 0.02);
+            border-bottom: 1px solid var(--border-color);
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .toolbar-filters {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .terminal-log {
+            flex: 1;
+            padding: 1.5rem;
+            overflow-y: auto;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            scroll-behavior: smooth;
+        }
+
+        /* Log items */
+        .log-item {
+            border-left: 3px solid #4b5563;
+            padding-left: 0.75rem;
+            margin-bottom: 0.5rem;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .log-item.status-msg {
+            border-color: var(--accent-purple);
+        }
+
+        .log-item.metrics-msg {
+            border-color: var(--accent-blue);
+        }
+
+        .log-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .log-time {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+
+        .log-type {
+            font-weight: 600;
+            font-size: 0.75rem;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+
+        .status-msg .log-type {
+            background-color: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+        }
+
+        .metrics-msg .log-type {
+            background-color: rgba(59, 130, 246, 0.15);
+            color: #93c5fd;
+        }
+
+        .log-body {
+            background-color: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 6px;
+            padding: 0.75rem;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            color: #e5e7eb;
+        }
+
+        /* Button styles */
+        .btn-small {
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.4rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .btn-small:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .search-input {
+            padding: 0.4rem 0.75rem;
+            font-size: 0.8rem;
+            width: 200px;
+        }
+
+        .json-key { color: #f28b82; }
+        .json-string { color: #81c995; }
+        .json-number { color: #aecbfa; }
+        .json-boolean { color: #fdd663; }
+        
+        /* Tab Navigation */
+        .tab-bar {
+            display: flex;
+            background-color: rgba(255, 255, 255, 0.02);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 0.65rem 1.25rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s, border-color 0.15s;
+            font-family: 'Inter', sans-serif;
+        }
+        .tab-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255,255,255,0.03);
+        }
+        .tab-btn.active {
+            color: var(--accent-blue);
+            border-bottom-color: var(--accent-blue);
+            font-weight: 600;
+        }
+        .tab-view {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+            overflow: hidden;
+        }
+        .tab-view.active {
+            display: flex;
+        }
+        
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="title-group">
+            <h1>
+                <span class="pulse-indicator" id="pulse"></span>
+                WebSocket Telemetry Stream Console
+            </h1>
+        </div>
+        <div>
+            <a href="/" style="color: var(--accent-blue); text-decoration: none; font-size: 0.875rem; font-weight: 500;">
+                ← Back to Dashboard
+            </a>
+        </div>
+    </header>
+
+    <div class="workspace">
+        <div class="sidebar">
+            <div class="control-group">
+                <label for="pipelineSelect">Select Pipeline</label>
+                <select id="pipelineSelect" onchange="handlePipelineChange(this.value)">
+                    <option value="">Loading pipelines...</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="entityFilter">Entities to Subscribe</label>
+                <textarea id="entityFilter" rows="6" placeholder="Enter comma-separated entity names..."></textarea>
+                <span style="font-size: 0.7rem; color: var(--text-secondary);">
+                    Leave blank to auto-subscribe all discovered entities.
+                </span>
+            </div>
+
+            <button class="btn btn-connect" id="btnConnect" onclick="startStream()">
+                ⚡ Start Live Telemetry
+            </button>
+            <button class="btn btn-disconnect" id="btnDisconnect" onclick="stopStream()">
+                ■ Stop Stream
+            </button>
+        </div>
+
+        <div class="console-container">
+            <!-- Tab Navigation -->
+            <div class="tab-bar">
+                <button class="tab-btn active" id="tab-btn-telemetry" onclick="switchViewTab('telemetry')">📡 Telemetry Stream</button>
+                <button class="tab-btn" id="tab-btn-api" onclick="switchViewTab('api')">🔧 API Explorer</button>
+            </div>
+
+            <!-- Tab 1: Telemetry Stream -->
+            <div id="tabView-telemetry" class="tab-view active">
+                <div class="toolbar">
+                    <div class="toolbar-filters">
+                        <label for="msgTypeFilter">Filter Msg:</label>
+                        <select id="msgTypeFilter" onchange="applyFilters()" style="padding: 0.4rem; font-size: 0.8rem;">
+                            <option value="all">All Messages</option>
+                            <option value="EntityStatusMessage">Status Updates Only</option>
+                            <option value="MetricsMessage">Metrics Breakdown Only</option>
+                        </select>
+
+                        <input type="text" id="logSearch" class="search-input" placeholder="Search keywords..." oninput="applyFilters()">
+                    </div>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn-small" onclick="togglePause()" id="btnPause">Pause Output</button>
+                        <button class="btn-small" onclick="clearLogs()">Clear Console</button>
+                    </div>
+                </div>
+
+                <div class="terminal-log" id="terminalLog">
+                    <div style="color: var(--text-secondary); text-align: center; margin-top: 5rem;">
+                        Configure pipeline / entities on the left, then click <strong>Start Live Telemetry</strong> to monitor raw WS frames.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 2: API Explorer -->
+            <div id="tabView-api" class="tab-view">
+                <div class="toolbar" style="justify-content:flex-start; gap:0.5rem;">
+                    <select id="apiMethod" style="padding:0.4rem 0.6rem; border-radius:4px; background:rgba(255,255,255,0.03);
+                           border:1px solid var(--border-color); color:var(--text-primary); font-size:0.8rem; font-weight:600;
+                           min-width:90px;">
+                        <option value="GET">GET</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="DELETE">DELETE</option>
+                    </select>
+                    <input type="text" id="apiUrl" placeholder="/pipelines — just enter the API path" 
+                        style="flex:1; padding:0.4rem 0.7rem; border-radius:4px;
+                               background:rgba(255,255,255,0.03); border:1px solid var(--border-color);
+                               color:var(--text-primary); font-size:0.85rem; font-family:monospace; outline:none;"
+                        onkeydown="if(event.key==='Enter') sendApiRequest()">
+                    <button onclick="sendApiRequest()" 
+                        style="background:var(--accent-blue); color:#fff; border:none; padding:0.4rem 1rem;
+                               border-radius:4px; font-weight:600; font-size:0.85rem; cursor:pointer;">▶ Send</button>
+                </div>
+
+                <!-- Quick endpoints row -->
+                <div style="display:flex; gap:0.4rem; flex-wrap:wrap; padding:0.5rem 1.5rem; background:rgba(255,255,255,0.01); border-bottom:1px solid var(--border-color); align-items:center;">
+                    <span style="color:var(--text-secondary); font-size:0.75rem;">Quick:</span>
+                    <button onclick="setApiEndpoint('/pipelines')" class="btn-small">GET /pipelines</button>
+                    <button onclick="setApiEndpoint('/pipelines/{id}')" class="btn-small">GET /pipelines/:id</button>
+                    <button onclick="setApiEndpoint('/pipelines/{id}/entities')" class="btn-small">GET /pipelines/:id/entities</button>
+                    <button onclick="setApiEndpoint('/pipelines/{id}/agents')" class="btn-small">GET /pipelines/:id/agents</button>
+                </div>
+
+                <div style="flex:1; overflow-y:auto; padding:1.5rem; display:flex; flex-direction:column; gap:0.75rem;">
+                    <!-- Request Body (for POST/PUT) -->
+                    <div id="apiBodySection" style="display:none;">
+                        <label style="display:block; color:var(--text-secondary); font-size:0.75rem; margin-bottom:0.3rem;">Request Body (JSON):</label>
+                        <textarea id="apiBody" rows="4" placeholder='{"key": "value"}'
+                            style="width:100%; padding:0.7rem; border-radius:6px;
+                                   background:rgba(255,255,255,0.03); border:1px solid var(--border-color);
+                                   color:var(--text-primary); font-size:0.85rem; font-family:monospace;
+                                   outline:none; resize:vertical;"></textarea>
+                    </div>
+
+                    <!-- Response -->
+                    <div style="flex:1; display:flex; flex-direction:column;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+                            <label style="color:var(--text-secondary); font-size:0.75rem;">Response:</label>
+                            <span id="apiResponseMeta" style="color:var(--text-secondary); font-size:0.75rem;"></span>
+                        </div>
+                        <pre id="apiResponse" style="background:rgba(255,255,255,0.02); border:1px solid var(--border-color);
+                                  border-radius:6px; padding:0.75rem; flex:1; overflow:auto;
+                                  color:var(--text-primary); font-size:0.85rem; font-family:monospace;
+                                  white-space:pre-wrap; word-wrap:break-word;">Click <strong>Send</strong> to see response here...</pre>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const API_HOST = window.location.hostname ? `${window.location.protocol}//${window.location.host}` : 'http://localhost:8081';
+        const WS_HOST = window.location.hostname ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}` : 'ws://localhost:8081';
+
+        let ws = null;
+        let isPaused = false;
+        let pipelines = [];
+        let entitiesList = [];
+
+        // Load active pipelines
+        async function init() {
+            try {
+                const res = await fetch(`${API_HOST}/api/pipelines`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                pipelines = await res.json();
+                
+                const select = document.getElementById('pipelineSelect');
+                select.innerHTML = '';
+                
+                if (pipelines.length === 0) {
+                    select.innerHTML = '<option value="">No active pipelines</option>';
+                    return;
+                }
+
+                pipelines.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.pipelineId;
+                    opt.textContent = p.name || p.pipelineId;
+                    select.appendChild(opt);
+                });
+
+                handlePipelineChange(pipelines[0].pipelineId);
+            } catch (err) {
+                console.error("Failed loading pipelines:", err);
+                document.getElementById('pipelineSelect').innerHTML = '<option value="">Failed to connect to API</option>';
+            }
+        }
+
+        async function handlePipelineChange(pipelineId) {
+            if (!pipelineId) return;
+            const textarea = document.getElementById('entityFilter');
+            textarea.value = 'Loading entities...';
+            
+            try {
+                const res = await fetch(`${API_HOST}/api/pipelines/${pipelineId}/entities`);
+                if (!res.ok) throw new Error();
+                entitiesList = await res.json();
+                
+                const names = entitiesList.map(e => e.entityName);
+                textarea.value = names.join(',\n');
+            } catch (err) {
+                textarea.value = '';
+            }
+        }
+
+        function syntaxHighlightJson(json) {
+            if (typeof json !== 'string') {
+                json = JSON.stringify(json, undefined, 2);
+            }
+            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-string';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        function startStream() {
+            const pipelineId = document.getElementById('pipelineSelect').value;
+            const entitiesInput = document.getElementById('entityFilter').value;
+            
+            if (!pipelineId) {
+                alert('Please select a pipeline');
+                return;
+            }
+
+            const cleanEntities = entitiesInput.split('\n')
+                .map(e => e.trim().replace(/,$/, ''))
+                .filter(e => e.length > 0)
+                .join(',');
+
+            if (!cleanEntities) {
+                alert('Please configure at least one entity name');
+                return;
+            }
+
+            document.getElementById('btnConnect').style.display = 'none';
+            document.getElementById('btnDisconnect').style.display = 'block';
+            
+            const logContainer = document.getElementById('terminalLog');
+            logContainer.innerHTML = `<div style="color: var(--accent);">[SYSTEM] Connecting to backend WebSocket stream...</div>`;
+
+            const socketUrl = `${WS_HOST}/ws/metrics?pipeline_id=${pipelineId}&entities=${encodeURIComponent(cleanEntities)}`;
+            ws = new WebSocket(socketUrl);
+
+            ws.onopen = () => {
+                document.getElementById('pulse').className = 'pulse-indicator connected';
+                appendSystemLog('WebSocket connection opened successfully. Subscribed to live telemetry feed.');
+            };
+
+            ws.onmessage = (event) => {
+                if (isPaused) return;
+                try {
+                    const data = JSON.parse(event.data);
+                    appendTelemetryLog(data);
+                } catch (err) {
+                    appendSystemLog(`Error parsing payload: ${err.message}\nData: ${event.data}`, 'error');
+                }
+            };
+
+            ws.onclose = (event) => {
+                document.getElementById('pulse').className = 'pulse-indicator';
+                appendSystemLog(`WebSocket connection closed: ${event.reason || 'No reason specified'} (${event.code})`);
+                stopStream();
+            };
+
+            ws.onerror = (err) => {
+                appendSystemLog(`WebSocket error detected: ${err.message || 'Check browser developer console'}`, 'error');
+            };
+        }
+
+        function stopStream() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            document.getElementById('btnConnect').style.display = 'block';
+            document.getElementById('btnDisconnect').style.display = 'none';
+            document.getElementById('pulse').className = 'pulse-indicator';
+        }
+
+        function appendSystemLog(msg, type = 'info') {
+            if (isPaused) return;
+            const logContainer = document.getElementById('terminalLog');
+            const div = document.createElement('div');
+            div.className = 'log-item';
+            div.style.borderLeftColor = type === 'error' ? 'var(--status-err)' : 'var(--text-secondary)';
+            
+            const time = new Date().toLocaleTimeString();
+            div.innerHTML = `
+                <div class="log-header">
+                    <span class="log-time">${time}</span>
+                    <span class="log-type" style="background: rgba(255,255,255,0.05); color: var(--text-secondary);">SYSTEM</span>
+                </div>
+                <div class="log-body" style="font-style: italic; color: ${type === 'error' ? '#f28b82' : 'var(--text-secondary)'};">${msg}</div>
+            `;
+            logContainer.appendChild(div);
+            scrollToBottom();
+        }
+
+        function appendTelemetryLog(data) {
+            const logContainer = document.getElementById('terminalLog');
+            const div = document.createElement('div');
+            
+            const msgType = data.Field_1_string || 'UnknownMessage';
+            const time = new Date().toLocaleTimeString();
+            
+            div.className = 'log-item';
+            div.dataset.msgType = msgType;
+            
+            if (msgType === 'EntityStatusMessage') {
+                div.classList.add('status-msg');
+            } else if (msgType === 'MetricsMessage') {
+                div.classList.add('metrics-msg');
+            }
+
+            const highlightedJson = syntaxHighlightJson(data);
+
+            div.innerHTML = `
+                <div class="log-header">
+                    <span class="log-time">${time}</span>
+                    <span class="log-type">${msgType}</span>
+                </div>
+                <pre class="log-body">${highlightedJson}</pre>
+            `;
+            
+            logContainer.appendChild(div);
+            
+            // Limit buffer size to last 200 messages to prevent browser slowdown
+            while (logContainer.children.length > 200) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+            
+            scrollToBottom();
+            applyFilters();
+        }
+
+        function scrollToBottom() {
+            const logContainer = document.getElementById('terminalLog');
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function togglePause() {
+            isPaused = !isPaused;
+            document.getElementById('btnPause').textContent = isPaused ? 'Resume Output' : 'Pause Output';
+            document.getElementById('btnPause').style.borderColor = isPaused ? 'var(--accent)' : '';
+        }
+
+        function clearLogs() {
+            document.getElementById('terminalLog').innerHTML = '';
+        }
+
+        function applyFilters() {
+            const filterType = document.getElementById('msgTypeFilter').value;
+            const searchVal = document.getElementById('logSearch').value.toLowerCase();
+            const logItems = document.querySelectorAll('.log-item');
+
+            logItems.forEach(item => {
+                const typeMatches = filterType === 'all' || item.dataset.msgType === filterType;
+                const textMatches = !searchVal || item.textContent.toLowerCase().includes(searchVal);
+
+                if (typeMatches && textMatches) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+
+        // ═══════════════════════════════════════════
+        // Tab Switching
+        // ═══════════════════════════════════════════
+        function switchViewTab(tabName) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(`tab-btn-${tabName}`).classList.add('active');
+            document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
+            document.getElementById(`tabView-${tabName}`).classList.add('active');
+        }
+        
+        // Show/hide request body based on method
+        document.addEventListener('DOMContentLoaded', () => {
+            const methodSelect = document.getElementById('apiMethod');
+            if (methodSelect) {
+                methodSelect.addEventListener('change', () => {
+                    const bodySection = document.getElementById('apiBodySection');
+                    const method = methodSelect.value;
+                    bodySection.style.display = (method === 'POST' || method === 'PUT') ? 'block' : 'none';
+                });
+            }
+        });
+        
+        function setApiEndpoint(endpoint) {
+            const urlInput = document.getElementById('apiUrl');
+            // Try to get selected pipeline ID
+            let pid = '';
+            try { pid = document.getElementById('pipelineSelect').value; } catch {}
+            const url = endpoint.replace('{id}', pid || '');
+            urlInput.value = url;
+            urlInput.focus();
+        }
+        
+        async function sendApiRequest() {
+            const method = document.getElementById('apiMethod').value;
+            let url = document.getElementById('apiUrl').value.trim();
+            const bodyText = document.getElementById('apiBody').value.trim();
+            const responseEl = document.getElementById('apiResponse');
+            const metaEl = document.getElementById('apiResponseMeta');
+        
+            if (!url) {
+                responseEl.textContent = 'Error: Please enter an API endpoint URL';
+                return;
+            }
+        
+            // Just send the path as-is — the backend proxy prepends GlueSync URL automatically
+        
+            // Show loading state
+            responseEl.textContent = 'Loading...';
+            metaEl.textContent = '';
+        
+            const startTime = Date.now();
+        
+            try {
+                // Validate JSON body for POST/PUT
+                let bodyJson = null;
+                if ((method === 'POST' || method === 'PUT') && bodyText) {
+                    try {
+                        bodyJson = JSON.parse(bodyText);
+                    } catch (e) {
+                        responseEl.textContent = `Error: Invalid JSON in request body\n${e.message}`;
+                        responseEl.style.color = '#f28b82';
+                        return;
+                    }
+                }
+        
+                // Proxy through backend
+                const proxyUrl = `${API_HOST}/api/proxy`;
+                const proxyBody = {
+                    target_url: url,
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: bodyJson
+                };
+        
+                const response = await fetch(proxyUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(proxyBody)
+                });
+        
+                const duration = Date.now() - startTime;
+        
+                // Parse response
+                const contentType = response.headers.get('content-type');
+                let result;
+                    
+                if (contentType && contentType.includes('application/json')) {
+                    result = await response.json();
+                    responseEl.textContent = JSON.stringify(result, null, 2);
+                } else {
+                    result = await response.text();
+                    responseEl.textContent = result;
+                }
+                responseEl.style.color = 'var(--text-primary)';
+        
+                // Update metadata
+                const statusColor = response.ok ? '#10b981' : '#f28b82';
+                metaEl.innerHTML = `<span style="color:${statusColor}; font-weight:600;">HTTP ${response.status}</span> | ${duration}ms | ${new Date().toLocaleTimeString()}`;
+        
+            } catch (error) {
+                const duration = Date.now() - startTime;
+                let errMsg = error.message || String(error);
+                // Add extra context for common fetch errors
+                if (errMsg === 'Failed to fetch' || errMsg.includes('NetworkError')) {
+                    errMsg = `Failed to fetch — could not reach \`${API_HOST}/api/proxy\`.\n` +
+                             `Make sure the backend is running on ${API_HOST} and check ` +
+                             `browser console (F12) for network errors.`;
+                }
+                responseEl.textContent = `Error: ${errMsg}`;
+                responseEl.style.color = '#f28b82';
+                metaEl.innerHTML = `<span style="color:#f28b82; font-weight:600;">ERROR</span> | ${duration}ms | ${new Date().toLocaleTimeString()}`;
+            }
+        }
+        
+        // Initialize setup on load
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

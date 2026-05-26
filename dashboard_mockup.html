@@ -633,6 +633,74 @@
         .diff-ok   { color: var(--status-running); }
         .diff-warn { color: #f59e0b; }
         .diff-err  { color: var(--status-error); }
+
+        /* Settings Modal CSS */
+        .modal-overlay.hidden {
+            display: none !important;
+        }
+        .side-tab-btn {
+            padding: 0.6rem 0.85rem;
+            border-radius: 8px;
+            border: none;
+            background: none;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .side-tab-btn:hover {
+            background: rgba(255,255,255,0.05);
+            color: var(--text-primary);
+        }
+        .side-tab-btn.active {
+            background: var(--accent-blue);
+            color: #fff;
+            font-weight: 600;
+        }
+        .settings-tab-panel.hidden {
+            display: none !important;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 36px;
+            height: 20px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border-color);
+            transition: .2s;
+            border-radius: 20px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 14px;
+            width: 14px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .2s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: var(--status-running);
+        }
+        input:checked + .slider:before {
+            transform: translateX(16px);
+        }
     </style>
 </head>
 <body>
@@ -652,6 +720,9 @@
         <div class="controls">
             <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
                 <svg id="themeIcon" viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
+            </button>
+            <button class="theme-toggle" id="settingsToggle" title="Scheduler Settings" onclick="openSettingsModal()">
+                <svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
             <div class="config-select">
                 <label for="pipelineSelect">Pipeline:</label>
@@ -891,10 +962,238 @@
 
 </div>
 
+    <!-- ══ SETTINGS MODAL ══ -->
+    <div id="settingsModal" class="modal-overlay hidden" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); backdrop-filter:blur(8px); z-index:1000; align-items:center; justify-content:center; padding:1.5rem;">
+        <div class="modal-card" style="width:100%; max-width:850px; height:85%; background:var(--bg-card); border:1px solid var(--border-color); border-radius:16px; display:flex; flex-direction:column; box-shadow:0 12px 24px -4px rgba(0,0,0,0.2); overflow:hidden;">
+            <!-- Modal Header -->
+            <div class="modal-header" style="padding:1.25rem 1.5rem; border-bottom:1px solid var(--border-color); display:flex; align-items:center; justify-content:space-between;">
+                <h2 style="margin:0; font-size:1.2rem; font-weight:700; color:var(--accent-primary); display:flex; align-items:center; gap:0.5rem;">
+                    ⚙️ Scheduler & Profiling Settings
+                </h2>
+                <button onclick="closeSettingsModal()" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:1.5rem; font-weight:700; line-height:1;">×</button>
+            </div>
+            
+            <!-- Modal Body (Two column / Split pane layout) -->
+            <div class="modal-body" style="flex:1; display:flex; overflow:hidden;">
+                <!-- Left Sidebar Nav -->
+                <div class="sidebar-nav" style="width:180px; border-right:1px solid var(--border-color); padding:1rem; display:flex; flex-direction:column; gap:0.5rem; background:var(--bg-secondary);">
+                    <button class="side-tab-btn active" id="btn-stab-jobs" onclick="switchSettingsTab('jobs')">📅 Jobs List</button>
+                    <button class="side-tab-btn" id="btn-stab-report-profiles" onclick="switchSettingsTab('report-profiles')">📋 Report Profiles</button>
+                    <button class="side-tab-btn" id="btn-stab-mailer-profiles" onclick="switchSettingsTab('mailer-profiles')">✉️ Mailer Profiles</button>
+                    <button class="side-tab-btn" id="btn-stab-logs" onclick="switchSettingsTab('logs')">📜 Scheduler Logs</button>
+                    <button class="side-tab-btn" id="btn-stab-global-settings" onclick="switchSettingsTab('global-settings')">⚙️ Global Config</button>
+                </div>
+                
+                <!-- Right Tab Contents -->
+                <div class="tab-content-area" style="flex:1; padding:1.5rem; overflow-y:auto; display:flex; flex-direction:column;">
+                    
+                    <!-- TAB: JOBS -->
+                    <div id="settings-tab-jobs" class="settings-tab-panel">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                            <h3 style="margin:0; font-size:1.1rem;">Scheduled Verification Jobs</h3>
+                            <button class="btn-create" onclick="showCreateJobForm()" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--accent-blue); color:#fff; font-size:0.8rem; font-weight:600; border:none; cursor:pointer;">+ Add Job</button>
+                        </div>
+                        
+                        <!-- Jobs List Table -->
+                        <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Status</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Name</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Schedule (Cron)</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Profiles</th>
+                                    <th style="text-align:right; padding:0.5rem; border-bottom:1px solid var(--border-color);">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jobsTbody">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                        
+                        <!-- Create Job Form Overlay -->
+                        <div id="jobFormContainer" style="display:none; margin-top:1.5rem; padding:1rem; border:1px solid var(--border-color); border-radius:10px; background:var(--bg-secondary);">
+                            <h4 style="margin-top:0; margin-bottom:1rem;">Create Scheduler Job</h4>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem;">
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Job Name</label>
+                                    <input type="text" id="jobNameInput" placeholder="e.g. Daily Sync Check" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Target Pipeline</label>
+                                    <select id="jobPipelineSelect" onchange="loadProfilesForPipelineSelection(this.value)" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;"></select>
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Report Profile</label>
+                                    <select id="jobReportProfileSelect" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;"></select>
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Mailer Profile</label>
+                                    <select id="jobMailerProfileSelect" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;"></select>
+                                </div>
+                            </div>
+                            
+                            <!-- Cron settings -->
+                            <div style="margin-bottom:1rem; padding:0.75rem; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
+                                <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem; font-weight:600;">Execution Cron Schedule</label>
+                                <select id="cronPresetSelect" onchange="applyCronPreset(this.value)" style="width:100%; padding:0.4rem; margin-bottom:0.5rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.85rem;">
+                                    <option value="">-- Choose a Preset Template --</option>
+                                    <option value="0 1 * * *">Run every night at 01:00</option>
+                                    <option value="0 20 * * 5">Run every Friday at 20:00</option>
+                                    <option value="*/30 * * * *">Run every 30 minutes</option>
+                                    <option value="0 9 * * 1-5">Run every weekday at 09:00</option>
+                                    <option value="custom">Custom Cron Expression...</option>
+                                </select>
+                                <input type="text" id="cronExpressionInput" placeholder="e.g. * * * * *" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;" readonly>
+                                <small style="display:block; font-size:0.7rem; color:var(--text-secondary); margin-top:0.25rem;">Format: Minute Hour Day-of-month Month Day-of-week (e.g. 0 1 * * *)</small>
+                            </div>
+                            
+                            <div style="display:flex; justify-content:end; gap:0.5rem;">
+                                <button onclick="cancelCreateJob()" style="padding:0.4rem 0.8rem; border-radius:6px; border:1px solid var(--border-color); background:none; color:var(--text-primary); cursor:pointer;">Cancel</button>
+                                <button onclick="saveSchedulerJob()" style="padding:0.4rem 0.8rem; border-radius:6px; border:none; background:var(--accent-blue); color:#fff; font-weight:600; cursor:pointer;">Save Job</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- TAB: REPORT PROFILES -->
+                    <div id="settings-tab-report-profiles" class="settings-tab-panel hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                            <h3 style="margin:0; font-size:1.1rem;">Report Profiles</h3>
+                            <button class="btn-create" onclick="showCreateReportProfileForm()" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--accent-blue); color:#fff; font-size:0.8rem; font-weight:600; border:none; cursor:pointer;">+ Create Profile</button>
+                        </div>
+                        
+                        <table style="width:100%; border-collapse:collapse; font-size:0.85rem; margin-bottom:1rem;">
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Name</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Pipeline</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Entities Included</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Mail Rule</th>
+                                    <th style="text-align:right; padding:0.5rem; border-bottom:1px solid var(--border-color);">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reportProfilesTbody"></tbody>
+                        </table>
+                        
+                        <!-- Create Report Profile Form -->
+                        <div id="reportProfileFormContainer" style="display:none; padding:1rem; border:1px solid var(--border-color); border-radius:10px; background:var(--bg-secondary);">
+                            <h4 style="margin-top:0; margin-bottom:1rem;">New Report Profile</h4>
+                            <div style="margin-bottom:1rem;">
+                                <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Profile Name</label>
+                                <input type="text" id="reportProfileNameInput" placeholder="e.g. Audit Entities Profile" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                            </div>
+                            <div style="margin-bottom:1rem;">
+                                <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Pipeline</label>
+                                <select id="reportProfilePipelineSelect" onchange="loadReportProfileEntities(this.value)" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;"></select>
+                            </div>
+                            
+                            <!-- Entities list with checkboxes -->
+                            <div style="margin-bottom:1rem;">
+                                <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Select Entities to include in Report</label>
+                                <div id="reportProfileEntitiesList" style="max-height:150px; overflow-y:auto; padding:0.5rem; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
+                                    <span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">Choose a pipeline first...</span>
+                                </div>
+                            </div>
+                            
+                            <div style="margin-bottom:1.5rem; display:flex; align-items:center; gap:0.5rem;">
+                                <input type="checkbox" id="reportProfileSkipMail" style="cursor:pointer;">
+                                <label for="reportProfileSkipMail" style="font-size:0.85rem; color:var(--text-primary); cursor:pointer;">Skip mailing report if all entities are fully in sync</label>
+                            </div>
+                            
+                            <div style="display:flex; justify-content:end; gap:0.5rem;">
+                                <button onclick="cancelCreateReportProfile()" style="padding:0.4rem 0.8rem; border-radius:6px; border:1px solid var(--border-color); background:none; color:var(--text-primary); cursor:pointer;">Cancel</button>
+                                <button onclick="saveReportProfile()" style="padding:0.4rem 0.8rem; border-radius:6px; border:none; background:var(--accent-blue); color:#fff; font-weight:600; cursor:pointer;">Save Profile</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- TAB: MAILER PROFILES -->
+                    <div id="settings-tab-mailer-profiles" class="settings-tab-panel hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                            <h3 style="margin:0; font-size:1.1rem;">Mailer Profiles</h3>
+                            <button class="btn-create" onclick="showCreateMailerProfileForm()" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--accent-blue); color:#fff; font-size:0.8rem; font-weight:600; border:none; cursor:pointer;">+ Create Profile</button>
+                        </div>
+                        
+                        <table style="width:100%; border-collapse:collapse; font-size:0.85rem; margin-bottom:1rem;">
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Name</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Recipient Emails</th>
+                                    <th style="text-align:left; padding:0.5rem; border-bottom:1px solid var(--border-color);">Subject Template</th>
+                                    <th style="text-align:right; padding:0.5rem; border-bottom:1px solid var(--border-color);">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mailerProfilesTbody"></tbody>
+                        </table>
+                        
+                        <!-- Create Mailer Profile Form -->
+                        <div id="mailerProfileFormContainer" style="display:none; padding:1rem; border:1px solid var(--border-color); border-radius:10px; background:var(--bg-secondary);">
+                            <h4 style="margin-top:0; margin-bottom:1rem;">New Mailer Profile</h4>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem;">
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Profile Name</label>
+                                    <input type="text" id="mailerProfileName" placeholder="e.g. Ops Team Alert" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Recipient Emails (comma separated)</label>
+                                    <input type="text" id="mailerProfileEmails" placeholder="ops@company.com, admin@company.com" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                                </div>
+                            </div>
+                            <div style="margin-bottom:1rem;">
+                                <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Email Subject Template</label>
+                                <input type="text" id="mailerProfileSubject" placeholder="Replication Report for {pipeline_id}" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                                <small style="display:block; font-size:0.7rem; color:var(--text-secondary); margin-top:0.25rem;">Variables supported: {pipeline_id}, {job_name}</small>
+                            </div>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem;">
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Greeting Section Header</label>
+                                    <textarea id="mailerProfileBodyHeader" rows="3" placeholder="Hello team, here is the automated replication report..." style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-family:sans-serif; font-size:0.85rem;"></textarea>
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Ending Section Footer</label>
+                                    <textarea id="mailerProfileBodyEnding" rows="3" placeholder="Regards, GlueSync Replica Monitor daemon" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-family:sans-serif; font-size:0.85rem;"></textarea>
+                                </div>
+                            </div>
+                            
+                            <div style="display:flex; justify-content:end; gap:0.5rem;">
+                                <button onclick="cancelCreateMailerProfile()" style="padding:0.4rem 0.8rem; border-radius:6px; border:1px solid var(--border-color); background:none; color:var(--text-primary); cursor:pointer;">Cancel</button>
+                                <button onclick="saveMailerProfile()" style="padding:0.4rem 0.8rem; border-radius:6px; border:none; background:var(--accent-blue); color:#fff; font-weight:600; cursor:pointer;">Save Profile</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- TAB: SCHEDULER LOGS -->
+                    <div id="settings-tab-logs" class="settings-tab-panel hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                            <h3 style="margin:0; font-size:1.1rem;">Recent Daemon Logs</h3>
+                            <button onclick="loadSchedulerLogs()" style="padding:0.4rem 0.8rem; border-radius:6px; border:none; background:var(--accent-blue); color:#fff; font-size:0.8rem; font-weight:600; cursor:pointer;">↻ Refresh Logs</button>
+                        </div>
+                        <div id="schedulerLogsContent" style="flex:1; height:300px; overflow-y:auto; font-family:'Fira Code', monospace; font-size:0.75rem; padding:0.75rem; border:1px solid var(--border-color); border-radius:8px; background:#0f172a; color:#f8fafc; white-space:pre-wrap;">
+                            No logs loaded...
+                        </div>
+                    </div>
+                    
+                    <!-- TAB: GLOBAL SETTINGS -->
+                    <div id="settings-tab-global-settings" class="settings-tab-panel hidden">
+                        <h3 style="margin-top:0; margin-bottom:1rem; font-size:1.1rem;">Global Scheduler Config</h3>
+                        <div style="margin-bottom:1.5rem;">
+                            <label style="display:block; font-size:0.8rem; font-weight:600; color:var(--text-primary); margin-bottom:0.25rem;">Global Scheduler Log File Path</label>
+                            <input type="text" id="settingsLogPath" placeholder="/app/replica-mon/cache/scheduler.log" style="width:100%; max-width:500px; padding:0.45rem 0.75rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                            <small style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-top:0.25rem;">Make sure the application has permission to write to this location.</small>
+                        </div>
+                        <button onclick="saveGlobalSettings()" style="padding:0.45rem 1rem; border-radius:6px; border:none; background:var(--accent-blue); color:#fff; font-weight:600; font-size:0.85rem; cursor:pointer;">
+                            Save Settings
+                        </button>
+                    </div>
+                    
+                </div>
+            </div>
+        </div>
+    </div>
+
 <script>
     // Constants for Host Resolution (supports both container service and local file testing)
-    const API_HOST = window.location.hostname ? `${window.location.protocol}//${window.location.host}` : 'http://localhost:8000';
-    const WS_HOST = window.location.hostname ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}` : 'ws://localhost:8000';
+    const API_HOST = window.location.hostname ? `${window.location.protocol}//${window.location.host}` : 'http://localhost:8081';
+    const WS_HOST = window.location.hostname ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}` : 'ws://localhost:8081';
 
     // Application State
     let allEntities = [];
@@ -1874,6 +2173,509 @@
             vCell.innerHTML = `<span class="${vClass}">${vText}</span>`;
         }
     }
+
+
+    // ── Scheduler & Profiling Modal Logic ──
+    window.openSettingsModal = function() {
+        const modal = document.getElementById('settingsModal');
+        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+        switchSettingsTab('jobs');
+        loadAllSettingsData();
+    };
+
+    window.closeSettingsModal = function() {
+        const modal = document.getElementById('settingsModal');
+        modal.style.display = 'none';
+        modal.classList.add('hidden');
+    };
+
+    window.switchSettingsTab = function(tabName) {
+        document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.add('hidden'));
+        document.querySelectorAll('.side-tab-btn').forEach(b => b.classList.remove('active'));
+        
+        document.getElementById(`settings-tab-${tabName}`).classList.remove('hidden');
+        document.getElementById(`btn-stab-${tabName}`).classList.add('active');
+        
+        if (tabName === 'logs') {
+            loadSchedulerLogs();
+        }
+    };
+
+    async function loadAllSettingsData() {
+        await loadSchedulerJobs();
+        await loadReportProfiles();
+        await loadMailerProfiles();
+        await loadGlobalConfig();
+        await populatePipelineDropdowns();
+    }
+
+    async function loadGlobalConfig() {
+        try {
+            const res = await fetch(`${API_HOST}/api/settings`);
+            if (res.ok) {
+                const settings = await res.json();
+                document.getElementById('settingsLogPath').value = settings.log_path || '/app/replica-mon/cache/scheduler.log';
+            }
+        } catch (err) {
+            console.error('Error loading settings:', err);
+        }
+    }
+
+    window.saveGlobalSettings = async function() {
+        const logPath = document.getElementById('settingsLogPath').value;
+        try {
+            const res = await fetch(`${API_HOST}/api/settings`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ log_path: logPath })
+            });
+            if (res.ok) {
+                alert('Global settings saved successfully.');
+            } else {
+                throw new Error('Failed to save');
+            }
+        } catch (err) {
+            alert('Error saving settings: ' + err.message);
+        }
+    };
+
+    // ── JOBS MANAGEMENT ──
+    let _allJobs = [];
+    let _pipelinesCache = [];
+
+    async function populatePipelineDropdowns() {
+        try {
+            const res = await fetch(`${API_HOST}/api/pipelines`);
+            if (res.ok) {
+                _pipelinesCache = await res.json();
+                
+                const jobPipeSelect = document.getElementById('jobPipelineSelect');
+                const rpPipeSelect = document.getElementById('reportProfilePipelineSelect');
+                
+                jobPipeSelect.innerHTML = '<option value="">-- Select Pipeline --</option>';
+                rpPipeSelect.innerHTML = '<option value="">-- Select Pipeline --</option>';
+                
+                _pipelinesCache.forEach(p => {
+                    const id = p.pipelineId || p.id;
+                    const name = p.name || id;
+                    jobPipeSelect.innerHTML += `<option value="${id}">${name}</option>`;
+                    rpPipeSelect.innerHTML += `<option value="${id}">${name}</option>`;
+                });
+            }
+        } catch (err) {
+            console.error('Error populating pipelines:', err);
+        }
+    }
+
+    async function loadSchedulerJobs() {
+        const tbody = document.getElementById('jobsTbody');
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:1rem;">Loading jobs...</td></tr>';
+        try {
+            const res = await fetch(`${API_HOST}/api/scheduler/jobs`);
+            if (res.ok) {
+                _allJobs = await res.json();
+                tbody.innerHTML = '';
+                if (_allJobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:1rem;">No jobs configured yet.</td></tr>';
+                    return;
+                }
+                _allJobs.forEach(job => {
+                    const tr = document.createElement('tr');
+                    const enabledChecked = job.enabled ? 'checked' : '';
+                    tr.innerHTML = `
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color);">
+                            <label class="switch">
+                                <input type="checkbox" ${enabledChecked} onchange="toggleJob(${job.id}, this.checked)">
+                                <span class="slider"></span>
+                            </label>
+                        </td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color);"><strong>${job.name}</strong><br><span style="font-size:0.7rem;color:var(--text-secondary)">Pipeline: ${job.pipeline_id}</span></td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-family:monospace;">${job.cron_expression}</td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.75rem;">
+                            Report: <strong>${job.report_profile_name || 'None'}</strong><br>
+                            Mail: <strong>${job.mailer_profile_name || 'None'}</strong>
+                        </td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); text-align:right;">
+                            <button onclick="deleteJob(${job.id})" style="padding:0.25rem 0.5rem; border-radius:4px; border:none; background:var(--status-error); color:#fff; font-size:0.75rem; cursor:pointer;">Delete</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--status-error);padding:1rem;">Error loading jobs.</td></tr>';
+        }
+    }
+
+    window.showCreateJobForm = function() {
+        document.getElementById('jobFormContainer').style.display = 'block';
+        document.getElementById('jobNameInput').value = '';
+        document.getElementById('jobPipelineSelect').value = '';
+        document.getElementById('jobReportProfileSelect').innerHTML = '<option value="">-- Choose Pipeline First --</option>';
+        document.getElementById('jobMailerProfileSelect').value = '';
+        document.getElementById('cronPresetSelect').value = '';
+        document.getElementById('cronExpressionInput').value = '';
+        document.getElementById('cronExpressionInput').readOnly = true;
+    };
+
+    window.cancelCreateJob = function() {
+        document.getElementById('jobFormContainer').style.display = 'none';
+    };
+
+    window.loadProfilesForPipelineSelection = async function(pipelineId) {
+        const rpSelect = document.getElementById('jobReportProfileSelect');
+        if (!pipelineId) {
+            rpSelect.innerHTML = '<option value="">-- Choose Pipeline First --</option>';
+            return;
+        }
+        rpSelect.innerHTML = '<option value="">Loading...</option>';
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/report?pipeline_id=${pipelineId}`);
+            if (res.ok) {
+                const profiles = await res.json();
+                rpSelect.innerHTML = '<option value="">-- Select Report Profile --</option>';
+                profiles.forEach(p => {
+                    rpSelect.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+                });
+            }
+        } catch (err) {
+            rpSelect.innerHTML = '<option value="">Error loading profiles</option>';
+        }
+        
+        const mpSelect = document.getElementById('jobMailerProfileSelect');
+        mpSelect.innerHTML = '<option value="">Loading...</option>';
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/mailer`);
+            if (res.ok) {
+                const profiles = await res.json();
+                mpSelect.innerHTML = '<option value="">-- Select Mailer Profile --</option>';
+                profiles.forEach(p => {
+                    mpSelect.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+                });
+            }
+        } catch (err) {
+            mpSelect.innerHTML = '<option value="">Error loading mailers</option>';
+        }
+    };
+
+    window.applyCronPreset = function(val) {
+        const input = document.getElementById('cronExpressionInput');
+        if (val === 'custom') {
+            input.value = '* * * * *';
+            input.readOnly = false;
+        } else if (val) {
+            input.value = val;
+            input.readOnly = true;
+        } else {
+            input.value = '';
+            input.readOnly = true;
+        }
+    };
+
+    window.saveSchedulerJob = async function() {
+        const name = document.getElementById('jobNameInput').value;
+        const pipelineId = document.getElementById('jobPipelineSelect').value;
+        const reportProfileId = document.getElementById('jobReportProfileSelect').value;
+        const mailerProfileId = document.getElementById('jobMailerProfileSelect').value;
+        const cronExpr = document.getElementById('cronExpressionInput').value;
+
+        if (!name || !pipelineId || !reportProfileId || !mailerProfileId || !cronExpr) {
+            alert('Please fill out all fields for the job.');
+            return;
+        }
+
+        try {
+            const res = await fetch(`${API_HOST}/api/scheduler/jobs`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    name,
+                    pipeline_id: pipelineId,
+                    cron_expression: cronExpr,
+                    report_profile_id: parseInt(reportProfileId),
+                    mailer_profile_id: parseInt(mailerProfileId),
+                    enabled: true
+                })
+            });
+            if (res.ok) {
+                document.getElementById('jobFormContainer').style.display = 'none';
+                loadSchedulerJobs();
+            } else {
+                throw new Error('Failed to save job');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    };
+
+    window.toggleJob = async function(jobId, enabled) {
+        try {
+            await fetch(`${API_HOST}/api/scheduler/jobs/${jobId}/toggle?enabled=${enabled}`, {
+                method: 'POST'
+            });
+        } catch (err) {
+            console.error('Error toggling job:', err);
+        }
+    };
+
+    window.deleteJob = async function(jobId) {
+        if (!confirm('Are you sure you want to delete this job?')) return;
+        try {
+            const res = await fetch(`${API_HOST}/api/scheduler/jobs/${jobId}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                loadSchedulerJobs();
+            }
+        } catch (err) {
+            console.error('Error deleting job:', err);
+        }
+    };
+
+    // ── REPORT PROFILES MANAGEMENT ──
+    let _allReportProfiles = [];
+
+    async function loadReportProfiles() {
+        const tbody = document.getElementById('reportProfilesTbody');
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:1rem;">Loading profiles...</td></tr>';
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/report`);
+            if (res.ok) {
+                _allReportProfiles = await res.json();
+                tbody.innerHTML = '';
+                if (_allReportProfiles.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:1rem;">No profiles configured.</td></tr>';
+                    return;
+                }
+                _allReportProfiles.forEach(p => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color);"><strong>${p.name}</strong></td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-family:monospace;">${p.pipeline_id}</td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.75rem;">${p.entities.join(', ')}</td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.8rem; color:var(--text-secondary);">
+                            ${p.skip_if_all_pass ? '✓ Skip if sync' : 'Always send'}
+                        </td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); text-align:right;">
+                            <button onclick="deleteReportProfile(${p.id})" style="padding:0.25rem 0.5rem; border-radius:4px; border:none; background:var(--status-error); color:#fff; font-size:0.75rem; cursor:pointer;">Delete</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--status-error);padding:1rem;">Error loading profiles.</td></tr>';
+        }
+    }
+
+    window.showCreateReportProfileForm = function() {
+        document.getElementById('reportProfileFormContainer').style.display = 'block';
+        document.getElementById('reportProfileNameInput').value = '';
+        document.getElementById('reportProfilePipelineSelect').value = '';
+        document.getElementById('reportProfileEntitiesList').innerHTML = '<span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">Choose a pipeline first...</span>';
+        document.getElementById('reportProfileSkipMail').checked = false;
+    };
+
+    window.cancelCreateReportProfile = function() {
+        document.getElementById('reportProfileFormContainer').style.display = 'none';
+    };
+
+    window.loadReportProfileEntities = async function(pipelineId) {
+        const listDiv = document.getElementById('reportProfileEntitiesList');
+        if (!pipelineId) {
+            listDiv.innerHTML = '<span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">Choose a pipeline first...</span>';
+            return;
+        }
+        listDiv.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">Loading entity list...</span>';
+        try {
+            const res = await fetch(`${API_HOST}/api/pipelines/${pipelineId}/entities`);
+            if (res.ok) {
+                const entities = await res.json();
+                listDiv.innerHTML = '';
+                if (entities.length === 0) {
+                    listDiv.innerHTML = '<span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">No entities in pipeline config.</span>';
+                    return;
+                }
+                entities.forEach(ent => {
+                    listDiv.innerHTML += `
+                        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
+                            <input type="checkbox" class="profile-entity-checkbox" value="${ent.entityName}" id="rp-ent-${ent.entityName}" style="cursor:pointer;" checked>
+                            <label for="rp-ent-${ent.entityName}" style="font-size:0.85rem; color:var(--text-primary); cursor:pointer;">${ent.entityName}</label>
+                        </div>
+                    `;
+                });
+            }
+        } catch (err) {
+            listDiv.innerHTML = '<span style="color:var(--status-error); font-size:0.8rem;">Error loading entities list.</span>';
+        }
+    };
+
+    window.saveReportProfile = async function() {
+        const name = document.getElementById('reportProfileNameInput').value;
+        const pipelineId = document.getElementById('reportProfilePipelineSelect').value;
+        const skipIfAllPass = document.getElementById('reportProfileSkipMail').checked;
+        
+        const checkedCheckboxes = Array.from(document.querySelectorAll('.profile-entity-checkbox:checked'));
+        const entities = checkedCheckboxes.map(cb => cb.value);
+
+        if (!name || !pipelineId || entities.length === 0) {
+            alert('Please fill name, pipeline, and select at least one entity.');
+            return;
+        }
+
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/report`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    name,
+                    pipeline_id: pipelineId,
+                    entities,
+                    skip_if_all_pass: skipIfAllPass
+                })
+            });
+            if (res.ok) {
+                document.getElementById('reportProfileFormContainer').style.display = 'none';
+                loadReportProfiles();
+            } else {
+                throw new Error('Failed to save profile');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    };
+
+    window.deleteReportProfile = async function(id) {
+        if (!confirm('Are you sure you want to delete this profile?')) return;
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/report/${id}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                loadReportProfiles();
+            }
+        } catch (err) {
+            console.error('Error deleting profile:', err);
+        }
+    };
+
+    // ── MAILER PROFILES MANAGEMENT ──
+    let _allMailerProfiles = [];
+
+    async function loadMailerProfiles() {
+        const tbody = document.getElementById('mailerProfilesTbody');
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:1rem;">Loading mailer profiles...</td></tr>';
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/mailer`);
+            if (res.ok) {
+                _allMailerProfiles = await res.json();
+                tbody.innerHTML = '';
+                if (_allMailerProfiles.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-secondary);padding:1rem;">No mailers configured.</td></tr>';
+                    return;
+                }
+                _allMailerProfiles.forEach(m => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color);"><strong>${m.name}</strong></td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.8rem;">${m.emails}</td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.8rem;">${m.subject}</td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); text-align:right;">
+                            <button onclick="deleteMailerProfile(${m.id})" style="padding:0.25rem 0.5rem; border-radius:4px; border:none; background:var(--status-error); color:#fff; font-size:0.75rem; cursor:pointer;">Delete</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--status-error);padding:1rem;">Error loading mailer profiles.</td></tr>';
+        }
+    }
+
+    window.showCreateMailerProfileForm = function() {
+        document.getElementById('mailerProfileFormContainer').style.display = 'block';
+        document.getElementById('mailerProfileName').value = '';
+        document.getElementById('mailerProfileEmails').value = '';
+        document.getElementById('mailerProfileSubject').value = '';
+        document.getElementById('mailerProfileBodyHeader').value = '';
+        document.getElementById('mailerProfileBodyEnding').value = '';
+    };
+
+    window.cancelCreateMailerProfile = function() {
+        document.getElementById('mailerProfileFormContainer').style.display = 'none';
+    };
+
+    window.saveMailerProfile = async function() {
+        const name = document.getElementById('mailerProfileName').value;
+        const emails = document.getElementById('mailerProfileEmails').value;
+        const subject = document.getElementById('mailerProfileSubject').value;
+        const bodyHeader = document.getElementById('mailerProfileBodyHeader').value;
+        const bodyEnding = document.getElementById('mailerProfileBodyEnding').value;
+
+        if (!name || !emails || !subject) {
+            alert('Please fill out Name, Recipient Emails, and Subject Template.');
+            return;
+        }
+
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/mailer`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    name,
+                    emails,
+                    subject,
+                    body_header: bodyHeader,
+                    body_ending: bodyEnding
+                })
+            });
+            if (res.ok) {
+                document.getElementById('mailerProfileFormContainer').style.display = 'none';
+                loadMailerProfiles();
+            } else {
+                throw new Error('Failed to save mailer profile');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    };
+
+    window.deleteMailerProfile = async function(id) {
+        if (!confirm('Are you sure you want to delete this mailer profile?')) return;
+        try {
+            const res = await fetch(`${API_HOST}/api/profiles/mailer/${id}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                loadMailerProfiles();
+            }
+        } catch (err) {
+            console.error('Error deleting mailer profile:', err);
+        }
+    };
+
+    // ── LOGS LOADER ──
+    window.loadSchedulerLogs = async function() {
+        const logsDiv = document.getElementById('schedulerLogsContent');
+        logsDiv.textContent = 'Loading logs...';
+        try {
+            const res = await fetch(`${API_HOST}/api/scheduler/logs?lines=60`);
+            if (res.ok) {
+                const logs = await res.json();
+                if (logs.length === 0) {
+                    logsDiv.textContent = 'No logs registered in log file yet. Execute scheduler tasks or check config path.';
+                    return;
+                }
+                logsDiv.textContent = logs.join('\n');
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            } else {
+                logsDiv.textContent = 'Failed to load logs from server.';
+            }
+        } catch (err) {
+            logsDiv.textContent = 'Error: ' + err.message;
+        }
+    };
 
 
     // Initial Bootstrap

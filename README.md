@@ -18,7 +18,7 @@ ReplicaMon validates that GlueSync replication is working correctly by:
 
 ## Environment Setup
 
-Create a `.env` file in the parent directory (`~/_qoder/.env`):
+Create a `.env` file in the project directory (`replica-mon/.env`):
 
 ```bash
 # AS400 Source Database
@@ -32,13 +32,45 @@ MSSQL_PASSWORD=your_mssql_password
 # MSSQL Admin (for CT operations)
 MSSQL_ADMIN_USER=your_mssql_admin_user
 MSSQL_ADMIN_PASSWORD=your_mssql_admin_password
+
+# GlueSync Core Hub (for dashboard & auto-discovery)
+GLUESYNC_HOST=https://localhost:1717
+GLUESYNC_ADMIN_USERNAME=admin
+GLUESYNC_ADMIN_PASSWORD=your_gluesync_password
 ```
 
 **⚠️ Security Note:** Never commit actual credentials to version control. Use environment variables or a `.env` file (added to `.gitignore`).
 
 ## Quick Start
 
-### 1. Automated Monitoring (Recommended)
+### 0. Web Dashboard (Recommended for Real-Time Monitoring)
+
+The dashboard provides a modern web UI with real-time WebSocket metrics, entity status, and verification tools:
+
+```bash
+cd ~/_qoder/replica-mon
+
+# Start the dashboard backend
+podman-compose up -d
+
+# Access the dashboard
+# Open: http://localhost:8000
+
+# View logs
+podman logs -f replica-mon
+
+# Stop the dashboard
+podman-compose down
+```
+
+**Dashboard Features:**
+- 📊 Real-time replication metrics via WebSocket
+- 🔍 Entity status monitoring (INSERT/UPDATE/DELETE counts)
+- ✅ Verify tool: Compare AS400 vs MSSQL record counts
+- 📈 Time-series metrics visualization
+- 🎯 Multi-pipeline support
+
+### 1. Automated CLI Monitoring
 
 Monitor all GlueSync entities automatically with intelligent caching. The tool is fully containerized and will automatically build its Docker/Podman image on first run:
 
@@ -59,9 +91,6 @@ cd ~/_qoder/replica-mon
 
 # Check last hour only
 ./replica-mon.sh --since "$(date -d '1 hour ago' '+%Y-%m-%d %H:%M:%S')"
-
-# Force rebuild the container image (e.g. if qadmcli or dependencies were updated)
-./replica-mon.sh --rebuild
 ```
 
 **Sample Output:**
@@ -465,6 +494,43 @@ fi
 
 ## Troubleshooting
 
+### Dashboard Issues
+
+**Dashboard not accessible at http://localhost:8000:**
+```bash
+# Check if container is running
+podman ps | grep replica-mon
+
+# Check container logs
+podman logs replica-mon
+
+# Restart the dashboard
+podman-compose down && podman-compose up -d
+```
+
+**Verify tool not showing AS400 counts:**
+```bash
+# Check if qadmcli config is mounted
+podman exec replica-mon ls -la /app/qadmcli/config/
+
+# Check verify logs for errors
+podman logs --tail 100 replica-mon | grep -i "verify"
+
+# Ensure .env has GlueSync credentials
+cat .env | grep GLUESYNC
+```
+
+**WebSocket not connecting:**
+```bash
+# Verify GlueSync is running
+curl -k https://localhost:1717
+
+# Check container has host network access
+podman exec replica-mon curl -k https://localhost:1717
+```
+
+### CLI Issues
+
 ### qadmcli not found
 Ensure qadmcli is in the correct location and executable:
 ```bash
@@ -492,21 +558,79 @@ Test qadmcli connections:
 
 ## Architecture
 
+ReplicaMon has **two operational modes**:
+
+### Mode 1: Web Dashboard (Always Running)
+
 ```
-┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│   AS400         │         │   ReplicaMon     │         │   MSSQL         │
-│   Journal       │─────┬──▶│                  │◀────┬───▶│   Change        │
-│  (Source)       │     │   │  • monitor.py    │     │    │   Tracking      │
-└─────────────────┘     │   │  • compare.py    │     │    └─────────────────┘
-                        │   │  • Auto-discovery│     │
-                        │   │  • Smart caching │     │
-                        │   └──────────────────┘     │
-                        │                            │
-                        │   ┌──────────────────┐     │
-                        └──▶│  GlueSync        │◀────┘
-                            │  Replication     │
-                            └──────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                   Web Browser                           │
+│              http://localhost:8000                      │
+└────────────────────┬────────────────────────────────────┘
+                     │ WebSocket + REST API
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│          replica-mon Container (podman-compose)         │
+│                                                         │
+│  • FastAPI Backend (port 8000)                         │
+│  • WebSocket Metrics Stream                            │
+│  • Verify Tool (AS400 ↔ MSSQL counts)                  │
+│  • Entity Auto-Discovery                               │
+│                                                         │
+│  Volumes:                                               │
+│    - ./cache:/app/replica-mon/cache:Z                  │
+│    - ./metrics:/app/replica-mon/metrics:Z              │
+│    - ../qadmcli/config:/app/qadmcli/config:Z           │
+│                                                         │
+│  Network: host (accesses GlueSync at localhost:1717)   │
+└──────┬──────────────────────────────┬──────────────────┘
+       │                              │
+       │ REST/WebSocket               │ qadmcli (JayDeBeApi)
+       ▼                              ▼
+┌──────────────────┐          ┌──────────────────┐
+│  GlueSync        │          │  AS400           │
+│  Core Hub        │          │  (161.82.146.249)│
+│  :1717           │          │                  │
+└──────────────────┘          └──────────────────┘
 ```
+
+**Start:** `podman-compose up -d`  
+**Use for:** Real-time monitoring, verification, web UI
+
+### Mode 2: CLI Tools (One-Shot Commands)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Terminal                               │
+│              ./replica-mon.sh                           │
+└────────────────────┬────────────────────────────────────┘
+                     │ podman run --rm
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│          replica-mon Container (ephemeral)              │
+│                                                         │
+│  • monitor.py (entity monitoring)                      │
+│  • compare.py (single table comparison)                │
+│  • Auto-discovery from replica-cli                     │
+│  • Intelligent caching                                 │
+│                                                         │
+│  Volumes:                                               │
+│    - ./cache:/app/replica-mon/cache:Z                  │
+│    - ./metrics:/app/replica-mon/metrics:Z              │
+│    - ../qadmcli/config:/app/qadmcli/config:Z           │
+└──────┬──────────────────────────────┬──────────────────┘
+       │                              │
+       │ qadmcli commands             │ qadmcli (JayDeBeApi)
+       ▼                              ▼
+┌──────────────────┐          ┌──────────────────┐
+│  AS400           │          │  MSSQL           │
+│  Journal         │          │  Change Tracking │
+│  (Source)        │          │  (Target)        │
+└──────────────────┘          └──────────────────┘
+```
+
+**Start:** `./replica-mon.sh`  
+**Use for:** Batch jobs, cron tasks, detailed comparisons, JSON output
 
 ### Key Features
 
@@ -522,6 +646,14 @@ Test qadmcli connections:
 This project follows standard Git workflow practices. See [`GIT_WORKFLOW.md`](../GIT_WORKFLOW.md) for details.
 
 ### Recent Changes
+
+- **v0.5.0** - Web Dashboard & Container Architecture Update
+  - Added FastAPI-based web dashboard with real-time WebSocket metrics
+  - Introduced `podman-compose.yaml` for dashboard backend deployment
+  - Updated `replica-mon.sh` to support new container volume structure
+  - Added verify tool: Compare AS400 vs MSSQL record counts from UI
+  - Added qadmcli config volume mount for AS400 counting support
+  - Removed `--rebuild` flag (use `podman build` directly if needed)
 
 - **v0.4.0** - Dockerization & Documentation Cleanup
   - Introduced `Containerfile` and `podman-compose.yaml` to containerize the monitoring tool natively.

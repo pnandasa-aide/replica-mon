@@ -38,7 +38,7 @@ RUN cp /opt/qadmcli/lib/jt400.jar /opt/jt400/jt400.jar || echo "jt400.jar not fo
 
 RUN pip install --upgrade pip && \
     cd /opt/qadmcli && pip install . && \
-    pip install fastapi uvicorn websockets requests pydantic aiofiles
+    pip install fastapi uvicorn websockets requests pydantic aiofiles httpx
 
 # Create app directory
 WORKDIR /app

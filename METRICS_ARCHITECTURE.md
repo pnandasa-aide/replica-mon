@@ -224,13 +224,14 @@ ORDER BY hour, entity_name;
 | `POST /api/pipelines/{id}/entities/{name}/start` | Start entity replication |
 | `POST /api/pipelines/{id}/entities/{name}/stop` | Stop entity replication |
 | `WS /ws/metrics` | Live decoded metrics stream |
+| `GET /api/metrics/{pipeline_id}/{entity_name}` | I/U/D breakdown for a time window (MAX-MIN delta pattern) |
+| `GET /api/metrics/{pipeline_id}` | Summary of I/U/D breakdown for all entities in a pipeline |
+| `GET /api/metrics/{pipeline_id}/{entity_name}/hourly` | Hourly I/U/D breakdown for charting/trends |
+| `GET /api/prometheus/query` | Proxy PromQL queries to Prometheus (applying `increase()` or custom windows) |
+| `GET /api/prometheus/throughput` | Proxy current rows/second throughput per entity from Prometheus |
+| `POST /api/verify/{pipeline_id}/run` | Start asynchronous source-to-target reconciliation / verification job |
+| `GET /api/verify/{pipeline_id}/results` | Retrieve current (incremental or complete) results of verification job |
 
-### Planned (implementing now)
-| Endpoint | Description |
-|---|---|
-| `GET /api/metrics/{pipeline_id}/{entity_name}` | I/U/D breakdown for time window |
-| `GET /api/metrics/{pipeline_id}` | Summary for all entities in pipeline |
-| `GET /api/prometheus/query` | Proxy PromQL query (total counts, throughput) |
 
 ---
 

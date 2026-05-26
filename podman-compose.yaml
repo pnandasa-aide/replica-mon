@@ -8,8 +8,9 @@ services:
     #   - GlueSync Core Hub at localhost:1717
     #   - Prometheus at localhost:9090
     # Note: with host networking, 'ports:' is not used — the container
-    #       binds directly to host ports (FastAPI → port 8000)
+    #       binds directly to host ports (FastAPI → port 8081)
     network_mode: host
+    entrypoint: ["uvicorn", "main:app", "--app-dir", "/app/replica-mon/backend", "--host", "0.0.0.0", "--port", "8081"]
     env_file:
       - .env
     environment:
@@ -20,4 +21,13 @@ services:
       - ./cache:/app/replica-mon/cache:Z
       # SQLite WebSocket metrics time-series store (new)
       - ./metrics:/app/replica-mon/metrics:Z
+      # Saved static HTML reports
+      - ./compare/reports:/app/replica-mon/compare/reports:Z
+      # Static HTML files (live editing without rebuild)
+      - ./dashboard_mockup.html:/app/replica-mon/dashboard_mockup.html:Z
+      - ./ws_viewer.html:/app/replica-mon/ws_viewer.html:Z
+      # Backend Python files (live editing without rebuild)
+      - ./backend:/app/replica-mon/backend:Z
+      # qadmcli config for AS400 connection (needed for verify tool)
+      - ../qadmcli/config:/app/qadmcli/config:Z
     restart: unless-stopped

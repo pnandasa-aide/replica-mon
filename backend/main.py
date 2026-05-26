@@ -98,6 +98,53 @@ def init_metrics_db():
         CREATE INDEX IF NOT EXISTS idx_entity_time
         ON ws_metrics(entity_name, captured_at)
     """)
+    
+    # Scheduler & Profiling System Tables
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scheduler_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS report_profiles (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            name              TEXT NOT NULL,
+            pipeline_id       TEXT NOT NULL,
+            entities          TEXT NOT NULL, -- JSON array of entity names
+            skip_if_all_pass  INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mailer_profiles (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            emails        TEXT NOT NULL, -- Comma-separated
+            subject       TEXT NOT NULL,
+            body_header   TEXT,
+            body_ending   TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scheduler_jobs (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            name              TEXT NOT NULL,
+            pipeline_id       TEXT NOT NULL,
+            cron_expression   TEXT NOT NULL,
+            report_profile_id INTEGER,
+            mailer_profile_id INTEGER,
+            enabled           INTEGER DEFAULT 1,
+            FOREIGN KEY(report_profile_id) REFERENCES report_profiles(id),
+            FOREIGN KEY(mailer_profile_id) REFERENCES mailer_profiles(id)
+        )
+    """)
+    
+    # Set default global log path
+    conn.execute("""
+        INSERT OR IGNORE INTO scheduler_settings (key, value)
+        VALUES ('log_path', '/app/replica-mon/cache/scheduler.log')
+    """)
+
     # Auto-cleanup: keep last 30 days
     conn.execute("""
         DELETE FROM ws_metrics
@@ -1841,6 +1888,425 @@ def enrich_with_metadata(data: dict, metadata_cache: dict) -> dict:
     return data
 
 
+# ─────────────────────────────────────────────
+# Scheduler & Profiling System
+# ─────────────────────────────────────────────
+
+class SettingsRequest(BaseModel):
+    log_path: str
+
+class ReportProfileRequest(BaseModel):
+    name: str
+    pipeline_id: str
+    entities: List[str]
+    skip_if_all_pass: bool
+
+class MailerProfileRequest(BaseModel):
+    name: str
+    emails: str
+    subject: str
+    body_header: Optional[str] = ""
+    body_ending: Optional[str] = ""
+
+class SchedulerJobRequest(BaseModel):
+    name: str
+    pipeline_id: str
+    cron_expression: str
+    report_profile_id: int
+    mailer_profile_id: int
+    enabled: Optional[bool] = True
+
+def cron_matches(cron_expr: str, dt) -> bool:
+    parts = cron_expr.split()
+    if len(parts) != 5:
+        return False
+    def match_part(part, val):
+        if part == '*':
+            return True
+        if ',' in part:
+            return any(match_part(p, val) for p in part.split(','))
+        if '-' in part:
+            start, end = map(int, part.split('-'))
+            return start <= val <= end
+        if part.startswith('*/'):
+            step = int(part[2:])
+            return val % step == 0
+        return int(part) == val
+    cron_dow = (dt.weekday() + 1) % 7
+    return (match_part(parts[0], dt.minute) and
+            match_part(parts[1], dt.hour) and
+            match_part(parts[2], dt.day) and
+            match_part(parts[3], dt.month) and
+            match_part(parts[4], cron_dow))
+
+def write_scheduler_log(log_path: str, message: str):
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, 'a', encoding='utf-8') as lf:
+            lf.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+    except Exception as e:
+        print(f"[scheduler] Error writing log: {e}")
+
+def save_mock_email(emails: str, subject: str, body_html: str):
+    try:
+        mock_dir = "/app/replica-mon/cache/mock_emails"
+        os.makedirs(mock_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"email_{timestamp}.html"
+        filepath = os.path.join(mock_dir, filename)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"<!-- TO: {emails} -->\n<!-- SUBJECT: {subject} -->\n{body_html}")
+    except Exception as e:
+        print(f"[scheduler] Error saving mock email: {e}")
+
+def execute_scheduler_job(job: dict, log_path: str):
+    import traceback
+    job_name = job['name']
+    pipeline_id = job['pipeline_id']
+    entities_to_verify = json.loads(job['entities'])
+    skip_if_all_pass = bool(job['skip_if_all_pass'])
+    emails = job['emails']
+    subject_tmpl = job['subject']
+    body_header = job['body_header'] or ""
+    body_ending = job['body_ending'] or ""
+    
+    write_scheduler_log(log_path, f"Starting job '{job_name}' for pipeline '{pipeline_id}'")
+    
+    try:
+        client = get_gluesync_client()
+        all_entities = client.list_entities(pipeline_id)
+        entities_map = {e.get('entityName'): e for e in all_entities if e.get('entityName')}
+        
+        results = []
+        for ent_name in entities_to_verify:
+            ent = entities_map.get(ent_name)
+            if not ent:
+                results.append({
+                    "entity_name": ent_name,
+                    "src_library": "",
+                    "src_table": "",
+                    "tgt_schema": "",
+                    "tgt_table": "",
+                    "source_count": None,
+                    "source_last_ts": None,
+                    "target_count": None,
+                    "target_last_ts": None,
+                    "diff": None,
+                    "error": "Entity not found in GlueSync pipeline config"
+                })
+                continue
+                
+            agents    = ent.get("agentEntities", [])
+            src_agent = agents[0] if len(agents) > 0 else {}
+            tgt_agent = agents[1] if len(agents) > 1 else {}
+            src_info   = src_agent.get("table", {})
+            src_library = src_info.get("schema", "")
+            src_table   = src_info.get("name", "")
+            tgt_info   = tgt_agent.get("table", {})
+            tgt_schema = tgt_info.get("schema", "")
+            tgt_table  = tgt_info.get("name", "")
+
+            res = {
+                "entity_name":    ent_name,
+                "src_library":    src_library,
+                "src_table":      src_table,
+                "tgt_schema":     tgt_schema,
+                "tgt_table":      tgt_table,
+                "source_count":   None,
+                "source_last_ts": None,
+                "target_count":   None,
+                "target_last_ts": None,
+                "diff":           None,
+                "error":          None,
+            }
+            
+            if src_library and src_table:
+                try:
+                    src_cnt, src_ts = _count_as400(src_library, src_table)
+                    res["source_count"] = src_cnt
+                    res["source_last_ts"] = src_ts or "—"
+                except Exception as e:
+                    res["error"] = f"AS400 Error: {str(e)[:150]}"
+            else:
+                res["error"] = "No source table info"
+                
+            if tgt_schema and tgt_table:
+                try:
+                    tgt_cnt, tgt_ts = _count_mssql(tgt_schema, tgt_table)
+                    res["target_count"] = tgt_cnt
+                    res["target_last_ts"] = tgt_ts or "—"
+                except Exception as e:
+                    res["error"] = f"MSSQL Error: {str(e)[:150]}"
+            else:
+                res["error"] = "No target table info"
+                
+            if res["source_count"] is not None and res["target_count"] is not None:
+                res["diff"] = res["source_count"] - res["target_count"]
+                
+            results.append(res)
+            
+        total_entities = len(results)
+        pass_count = sum(1 for r in results if r.get('diff') == 0)
+        fail_count = sum(1 for r in results if r.get('diff') is not None and r.get('diff') != 0)
+        error_count = sum(1 for r in results if r.get('error') is not None and r.get('target_count') is None)
+        is_all_pass = (fail_count == 0 and error_count == 0)
+        
+        job_mock_store = {
+            "status": "done",
+            "total": total_entities,
+            "done_count": total_entities,
+            "results": results
+        }
+        filename = save_verification_report(pipeline_id, job_mock_store)
+        report_url = f"/reports/{pipeline_id}/{filename}"
+        
+        write_scheduler_log(log_path, f"Job '{job_name}': report saved to {filename} (Pass: {pass_count}/{total_entities}, Fail: {fail_count}, Error: {error_count})")
+        
+        if skip_if_all_pass and is_all_pass:
+            write_scheduler_log(log_path, f"Job '{job_name}': skip mailing report because all entities are in sync.")
+            return
+            
+        body_header_html = (body_header or "").replace('\n', '<br>')
+        body_ending_html = (body_ending or "").replace('\n', '<br>')
+        
+        mail_subject = subject_tmpl.replace("{pipeline_id}", pipeline_id).replace("{job_name}", job_name)
+        summary_html = f"""
+        <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; border: 1px solid #ddd; border-radius: 8px;">
+            <p>{body_header_html}</p>
+            <hr style="border: 1px solid #eee; margin: 15px 0;">
+            <h3 style="color:#1e3a8a;">Verification Summary</h3>
+            <ul>
+                <li><strong>Pipeline:</strong> {pipeline_id}</li>
+                <li><strong>Job Name:</strong> {job_name}</li>
+                <li><strong>Entities Checked:</strong> {total_entities}</li>
+                <li><strong>In Sync:</strong> {pass_count}</li>
+                <li><strong>Discrepancies:</strong> {fail_count}</li>
+                <li><strong>Errors:</strong> {error_count}</li>
+            </ul>
+            <p style="margin: 20px 0;">
+               <a href="http://localhost:8081{report_url}" style="display:inline-block; padding: 10px 20px; background-color: #3b82f6; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">
+                  Open Full Report ↗
+               </a>
+            </p>
+            <hr style="border: 1px solid #eee; margin: 15px 0;">
+            <p>{body_ending_html}</p>
+        </div>
+        """
+        save_mock_email(emails, mail_subject, summary_html)
+        write_scheduler_log(log_path, f"Job '{job_name}': Simulated email summary successfully generated for recipient(s): {emails}")
+    except Exception as e:
+        err_msg = f"Error executing job '{job_name}': {str(e)}\n{traceback.format_exc()}"
+        print(f"[scheduler] {err_msg}", flush=True)
+        write_scheduler_log(log_path, err_msg)
+
+def run_scheduled_jobs():
+    dt = datetime.now()
+    log_path = "/app/replica-mon/cache/scheduler.log"
+    try:
+        conn = sqlite3.connect(METRICS_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT value FROM scheduler_settings WHERE key = 'log_path'").fetchone()
+        if row:
+            log_path = row['value']
+        jobs = conn.execute("""
+            SELECT j.*, rp.name as rp_name, rp.entities, rp.skip_if_all_pass,
+                   mp.name as mp_name, mp.emails, mp.subject, mp.body_header, mp.body_ending
+            FROM scheduler_jobs j
+            JOIN report_profiles rp ON j.report_profile_id = rp.id
+            JOIN mailer_profiles mp ON j.mailer_profile_id = mp.id
+            WHERE j.enabled = 1
+        """).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[scheduler] DB error: {e}", flush=True)
+        return
+
+    for job in jobs:
+        cron_expr = job['cron_expression']
+        if cron_matches(cron_expr, dt):
+            t = threading.Thread(target=execute_scheduler_job, args=(dict(job), log_path), daemon=True)
+            t.start()
+
+def scheduler_loop():
+    import time
+    print("[scheduler] Thread started", flush=True)
+    while True:
+        try:
+            now = datetime.now()
+            sleep_time = 60 - now.second - (now.microsecond / 1000000.0)
+            time.sleep(sleep_time)
+            run_scheduled_jobs()
+        except Exception as e:
+            print(f"[scheduler] Error in loop: {e}", flush=True)
+            time.sleep(10)
+
+# Start scheduler on import
+t = threading.Thread(target=scheduler_loop, daemon=True)
+t.start()
+
+# ── Settings API ──
+@app.get("/api/settings")
+def get_settings():
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT key, value FROM scheduler_settings").fetchall()
+        return {r['key']: r['value'] for r in rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/settings")
+def save_settings(req: SettingsRequest):
+    try:
+        conn = get_db()
+        conn.execute("INSERT OR REPLACE INTO scheduler_settings (key, value) VALUES ('log_path', ?)", (req.log_path,))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Report Profiles API ──
+@app.get("/api/profiles/report")
+def list_report_profiles(pipeline_id: str = None):
+    try:
+        conn = get_db()
+        if pipeline_id:
+            rows = conn.execute("SELECT * FROM report_profiles WHERE pipeline_id = ?", (pipeline_id,)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM report_profiles").fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d['entities'] = json.loads(d['entities'])
+            d['skip_if_all_pass'] = bool(d['skip_if_all_pass'])
+            result.append(d)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/profiles/report")
+def save_report_profile(req: ReportProfileRequest):
+    try:
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO report_profiles (name, pipeline_id, entities, skip_if_all_pass)
+            VALUES (?, ?, ?, ?)
+        """, (req.name, req.pipeline_id, json.dumps(req.entities), 1 if req.skip_if_all_pass else 0))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/profiles/report/{profile_id}")
+def delete_report_profile(profile_id: int):
+    try:
+        conn = get_db()
+        conn.execute("DELETE FROM report_profiles WHERE id = ?", (profile_id,))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Mailer Profiles API ──
+@app.get("/api/profiles/mailer")
+def list_mailer_profiles():
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT * FROM mailer_profiles").fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/profiles/mailer")
+def save_mailer_profile(req: MailerProfileRequest):
+    try:
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO mailer_profiles (name, emails, subject, body_header, body_ending)
+            VALUES (?, ?, ?, ?, ?)
+        """, (req.name, req.emails, req.subject, req.body_header, req.body_ending))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/profiles/mailer/{profile_id}")
+def delete_mailer_profile(profile_id: int):
+    try:
+        conn = get_db()
+        conn.execute("DELETE FROM mailer_profiles WHERE id = ?", (profile_id,))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Scheduler Jobs API ──
+@app.get("/api/scheduler/jobs")
+def list_scheduler_jobs():
+    try:
+        conn = get_db()
+        rows = conn.execute("""
+            SELECT j.*, rp.name as report_profile_name, mp.name as mailer_profile_name
+            FROM scheduler_jobs j
+            LEFT JOIN report_profiles rp ON j.report_profile_id = rp.id
+            LEFT JOIN mailer_profiles mp ON j.mailer_profile_id = mp.id
+        """).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d['enabled'] = bool(d['enabled'])
+            result.append(d)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/scheduler/jobs")
+def save_scheduler_job(req: SchedulerJobRequest):
+    try:
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO scheduler_jobs (name, pipeline_id, cron_expression, report_profile_id, mailer_profile_id, enabled)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (req.name, req.pipeline_id, req.cron_expression, req.report_profile_id, req.mailer_profile_id, 1 if req.enabled else 0))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/scheduler/jobs/{job_id}")
+def delete_scheduler_job(job_id: int):
+    try:
+        conn = get_db()
+        conn.execute("DELETE FROM scheduler_jobs WHERE id = ?", (job_id,))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/scheduler/jobs/{job_id}/toggle")
+def toggle_scheduler_job(job_id: int, enabled: bool):
+    try:
+        conn = get_db()
+        conn.execute("UPDATE scheduler_jobs SET enabled = ? WHERE id = ?", (1 if enabled else 0, job_id))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/scheduler/logs")
+def get_scheduler_logs(lines: int = 50):
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT value FROM scheduler_settings WHERE key = 'log_path'").fetchone()
+        log_path = row['value'] if row else "/app/replica-mon/cache/scheduler.log"
+        if not os.path.exists(log_path):
+            return []
+        with open(log_path, 'r', encoding='utf-8') as f:
+            content = f.readlines()
+        return [l.strip() for l in content[-lines:]]
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8081, reload=True)

@@ -154,7 +154,29 @@ Reconciling row changes requires careful timezone awareness due to different clo
 
 ---
 
-## 5. How to Update ReplicaMon when Sibling Projects Update
+## 5. Asynchronous Data Verification & Reconciliation Engine
+
+To resolve potential UI timeouts when verifying very large tables, ReplicaMon uses a polling-based asynchronous verification pipeline.
+
+### The Verification Workflow
+
+1. **Triggering the Job:**
+   - The user triggers a reconciliation job via the Dashboard, which issues a `POST /api/verify/{pipeline_id}/run`.
+   - The backend discovers active tables/entities dynamically from GlueSync, instantiates a background thread (`_verify_worker`), and immediately returns a job ticket with status `started` and a polling URL (`/api/verify/{pipeline_id}/results`).
+
+2. **The Background Worker (`_verify_worker`):**
+   - The worker iterates through each table pair in sequence to calculate row counts.
+   - **AS400 Source Counting:** Imports the `qadmcli` module directly to use its JDBC connection capability (`AS400ConnectionManager`). It automatically reads the credentials from the parent `.env` file and executes a direct `SELECT COUNT(*)` on the DB2 library/table.
+   - **MSSQL Target Counting:** Uses `pyodbc` to execute a direct query on the SQL Server instance. It also attempts to retrieve the latest update timestamp by scanning for common date/time columns (e.g., `LastUpdate`, `UpdatedAt`).
+   - The worker updates a thread-safe, in-memory job store (`_verify_jobs`) incrementally as each table is counted.
+
+3. **Incremental UI Polling:**
+   - The Web Dashboard polls `GET /api/verify/{pipeline_id}/results` every 2 seconds.
+   - The response includes the current `done_count`, the total table list, and the computed deltas for completed tables. This provides immediate, real-time feedback to the user as reconciliation progress is made.
+
+---
+
+## 6. How to Update ReplicaMon when Sibling Projects Update
 
 If you make modifications to the sibling utilities (`qadmcli`, `replica-cli`, or `replica_msdk`), you must ensure `replica-mon` gets these updates. How to do this depends on how you are running the project:
 
@@ -186,10 +208,11 @@ If you are running the command-line scripts (`compare.py` or `monitor.py`) direc
 
 ---
 
-## 6. Directory Map & Quick Reference
+## 7. Directory Map & Quick Reference
 
 ```
 _qoder/
+
 ├── .env                       <-- Core Shared Credentials (DBs, IPs, passwords)
 ├── qadmcli/                   <-- AS400 / MSSQL Administrative tool
 │   ├── config/connection.yaml <-- Connection configs used by Direct JDBC
