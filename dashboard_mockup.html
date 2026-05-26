@@ -2329,6 +2329,8 @@
         }
     }
 
+    let _editingJobId = null;
+
     async function loadSchedulerJobs() {
         const tbody = document.getElementById('jobsTbody');
         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:1rem;">Loading jobs...</td></tr>';
@@ -2358,6 +2360,7 @@
                             Mail: <strong>${job.mailer_profile_name || 'None'}</strong>
                         </td>
                         <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); text-align:right;">
+                            <button onclick="editJob(${job.id})" style="padding:0.25rem 0.5rem; border-radius:4px; border:none; background:var(--accent-blue); color:#fff; font-size:0.75rem; cursor:pointer; margin-right:0.25rem;">Edit</button>
                             <button onclick="deleteJob(${job.id})" style="padding:0.25rem 0.5rem; border-radius:4px; border:none; background:var(--status-error); color:#fff; font-size:0.75rem; cursor:pointer;">Delete</button>
                         </td>
                     `;
@@ -2370,7 +2373,9 @@
     }
 
     window.showCreateJobForm = function() {
+        _editingJobId = null;
         document.getElementById('jobFormContainer').style.display = 'block';
+        document.getElementById('jobFormContainer').querySelector('h4').innerText = 'New Scheduler Job';
         document.getElementById('jobNameInput').value = '';
         document.getElementById('jobPipelineSelect').value = '';
         document.getElementById('jobReportProfileSelect').innerHTML = '<option value="">-- Choose Pipeline First --</option>';
@@ -2380,8 +2385,43 @@
         document.getElementById('cronExpressionInput').readOnly = true;
     };
 
+    window.editJob = async function(id) {
+        const job = _allJobs.find(j => j.id === id);
+        if (!job) return;
+        
+        _editingJobId = id;
+        
+        const formContainer = document.getElementById('jobFormContainer');
+        formContainer.style.display = 'block';
+        formContainer.querySelector('h4').innerText = 'Edit Scheduler Job';
+        formContainer.scrollIntoView({ behavior: 'smooth' });
+        
+        document.getElementById('jobNameInput').value = job.name;
+        document.getElementById('jobPipelineSelect').value = job.pipeline_id;
+        
+        // Load dropdowns based on pipeline
+        await loadProfilesForPipelineSelection(job.pipeline_id);
+        
+        document.getElementById('jobReportProfileSelect').value = job.report_profile_id;
+        document.getElementById('jobMailerProfileSelect').value = job.mailer_profile_id;
+        
+        // Handle cron preset matching
+        const presetSelect = document.getElementById('cronPresetSelect');
+        const presets = ['* * * * *', '0 1 * * *', '0 20 * * 5'];
+        if (presets.includes(job.cron_expression)) {
+            presetSelect.value = job.cron_expression;
+            document.getElementById('cronExpressionInput').value = job.cron_expression;
+            document.getElementById('cronExpressionInput').readOnly = true;
+        } else {
+            presetSelect.value = 'custom';
+            document.getElementById('cronExpressionInput').value = job.cron_expression;
+            document.getElementById('cronExpressionInput').readOnly = false;
+        }
+    };
+
     window.cancelCreateJob = function() {
         document.getElementById('jobFormContainer').style.display = 'none';
+        _editingJobId = null;
     };
 
     window.loadProfilesForPipelineSelection = async function(pipelineId) {
@@ -2446,21 +2486,27 @@
             return;
         }
 
+        const payload = {
+            name,
+            pipeline_id: pipelineId,
+            cron_expression: cronExpr,
+            report_profile_id: parseInt(reportProfileId),
+            mailer_profile_id: parseInt(mailerProfileId),
+            enabled: true
+        };
+        if (_editingJobId !== null) {
+            payload.id = _editingJobId;
+        }
+
         try {
             const res = await fetch(`${API_HOST}/api/scheduler/jobs`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    name,
-                    pipeline_id: pipelineId,
-                    cron_expression: cronExpr,
-                    report_profile_id: parseInt(reportProfileId),
-                    mailer_profile_id: parseInt(mailerProfileId),
-                    enabled: true
-                })
+                body: JSON.stringify(payload)
             });
             if (res.ok) {
                 document.getElementById('jobFormContainer').style.display = 'none';
+                _editingJobId = null;
                 loadSchedulerJobs();
             } else {
                 throw new Error('Failed to save job');
@@ -2497,6 +2543,7 @@
     // ── REPORT PROFILES MANAGEMENT ──
     let _allReportProfiles = [];
     let _rpExpandedPages = {}; // profileId -> pageNumber
+    let _editingReportProfileId = null;
 
     async function loadReportProfiles() {
         const tbody = document.getElementById('reportProfilesTbody');
@@ -2526,7 +2573,7 @@
                             </div>
                         `;
                     } else {
-                        entitiesHtml = p.entities ? p.entities.join(', ') : '';
+                        entitiesHtml = p.entities ? `<span style="word-break:break-word; white-space:normal; line-height:1.4; display:inline-block; max-width:320px;">${p.entities.join(', ')}</span>` : '';
                     }
 
                     const tr = document.createElement('tr');
@@ -2538,6 +2585,7 @@
                             ${p.skip_if_all_pass ? '✓ Skip if sync' : 'Always send'}
                         </td>
                         <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); text-align:right;">
+                            <button onclick="editReportProfile(${p.id})" style="padding:0.25rem 0.5rem; border-radius:4px; border:none; background:var(--accent-blue); color:#fff; font-size:0.75rem; cursor:pointer; margin-right:0.25rem;">Edit</button>
                             <button onclick="deleteReportProfile(${p.id})" style="padding:0.25rem 0.5rem; border-radius:4px; border:none; background:var(--status-error); color:#fff; font-size:0.75rem; cursor:pointer;">Delete</button>
                         </td>
                     `;
@@ -2557,7 +2605,9 @@
     const RP_SELECTOR_PAGE_SIZE = 10;
 
     window.showCreateReportProfileForm = function() {
+        _editingReportProfileId = null;
         document.getElementById('reportProfileFormContainer').style.display = 'block';
+        document.getElementById('reportProfileFormContainer').querySelector('h4').innerText = 'New Report Profile';
         document.getElementById('reportProfileNameInput').value = '';
         document.getElementById('reportProfilePipelineSelect').value = '';
         document.getElementById('reportProfileEntitiesList').innerHTML = '<span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">Choose a pipeline first...</span>';
@@ -2576,8 +2626,33 @@
         document.getElementById('rpSelectorPagination').style.display = 'none';
     };
 
+    window.editReportProfile = async function(id) {
+        const profile = _allReportProfiles.find(p => p.id === id);
+        if (!profile) return;
+        
+        _editingReportProfileId = id;
+        
+        const formContainer = document.getElementById('reportProfileFormContainer');
+        formContainer.style.display = 'block';
+        formContainer.querySelector('h4').innerText = 'Edit Report Profile';
+        formContainer.scrollIntoView({ behavior: 'smooth' });
+        
+        document.getElementById('reportProfileNameInput').value = profile.name;
+        document.getElementById('reportProfilePipelineSelect').value = profile.pipeline_id;
+        
+        // Load entity selector checkboxes for this pipeline
+        await loadReportProfileEntities(profile.pipeline_id);
+        
+        // Restore selected checkboxes
+        _rpSelectorSelected = new Set(profile.entities);
+        renderRpSelectorPage();
+        
+        document.getElementById('reportProfileSkipMail').checked = profile.skip_if_all_pass;
+    };
+
     window.cancelCreateReportProfile = function() {
         document.getElementById('reportProfileFormContainer').style.display = 'none';
+        _editingReportProfileId = null;
     };
 
     window.loadReportProfileEntities = async function(pipelineId) {
@@ -2749,9 +2824,9 @@
         const listDiv = document.getElementById(`rp-expanded-list-${profileId}`);
         if (!listDiv) return;
         
-        let html = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:0.25rem 0.5rem; font-family:monospace; font-size:0.7rem; max-height:120px; overflow-y:auto; margin-bottom:0.4rem;">`;
+        let html = `<div style="display:flex; flex-direction:column; gap:0.3rem; font-family:monospace; font-size:0.7rem; max-height:150px; overflow-y:auto; margin-bottom:0.4rem; padding-right:0.25rem;">`;
         pageEntities.forEach(ent => {
-            html += `<div style="color:var(--text-primary); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${ent}">• ${ent}</div>`;
+            html += `<div style="color:var(--text-primary); word-break:break-all; white-space:normal; line-height:1.2;">• ${ent}</div>`;
         });
         html += `</div>`;
         
@@ -2783,19 +2858,25 @@
             return;
         }
 
+        const payload = {
+            name,
+            pipeline_id: pipelineId,
+            entities,
+            skip_if_all_pass: skipIfAllPass
+        };
+        if (_editingReportProfileId !== null) {
+            payload.id = _editingReportProfileId;
+        }
+
         try {
             const res = await fetch(`${API_HOST}/api/profiles/report`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    name,
-                    pipeline_id: pipelineId,
-                    entities,
-                    skip_if_all_pass: skipIfAllPass
-                })
+                body: JSON.stringify(payload)
             });
             if (res.ok) {
                 document.getElementById('reportProfileFormContainer').style.display = 'none';
+                _editingReportProfileId = null;
                 loadReportProfiles();
             } else {
                 throw new Error('Failed to save profile');

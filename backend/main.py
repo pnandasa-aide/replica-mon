@@ -1896,12 +1896,14 @@ class SettingsRequest(BaseModel):
     log_path: str
 
 class ReportProfileRequest(BaseModel):
+    id: Optional[int] = None
     name: str
     pipeline_id: str
     entities: List[str]
     skip_if_all_pass: bool
 
 class MailerProfileRequest(BaseModel):
+    id: Optional[int] = None
     name: str
     emails: str
     subject: str
@@ -1909,6 +1911,7 @@ class MailerProfileRequest(BaseModel):
     body_ending: Optional[str] = ""
 
 class SchedulerJobRequest(BaseModel):
+    id: Optional[int] = None
     name: str
     pipeline_id: str
     cron_expression: str
@@ -2187,10 +2190,17 @@ def list_report_profiles(pipeline_id: str = None):
 def save_report_profile(req: ReportProfileRequest):
     try:
         conn = get_db()
-        conn.execute("""
-            INSERT INTO report_profiles (name, pipeline_id, entities, skip_if_all_pass)
-            VALUES (?, ?, ?, ?)
-        """, (req.name, req.pipeline_id, json.dumps(req.entities), 1 if req.skip_if_all_pass else 0))
+        if req.id is not None:
+            conn.execute("""
+                UPDATE report_profiles 
+                SET name = ?, pipeline_id = ?, entities = ?, skip_if_all_pass = ?
+                WHERE id = ?
+            """, (req.name, req.pipeline_id, json.dumps(req.entities), 1 if req.skip_if_all_pass else 0, req.id))
+        else:
+            conn.execute("""
+                INSERT INTO report_profiles (name, pipeline_id, entities, skip_if_all_pass)
+                VALUES (?, ?, ?, ?)
+            """, (req.name, req.pipeline_id, json.dumps(req.entities), 1 if req.skip_if_all_pass else 0))
         conn.commit()
         return {"status": "success"}
     except Exception as e:
@@ -2220,10 +2230,17 @@ def list_mailer_profiles():
 def save_mailer_profile(req: MailerProfileRequest):
     try:
         conn = get_db()
-        conn.execute("""
-            INSERT INTO mailer_profiles (name, emails, subject, body_header, body_ending)
-            VALUES (?, ?, ?, ?, ?)
-        """, (req.name, req.emails, req.subject, req.body_header, req.body_ending))
+        if req.id is not None:
+            conn.execute("""
+                UPDATE mailer_profiles 
+                SET name = ?, emails = ?, subject = ?, body_header = ?, body_ending = ?
+                WHERE id = ?
+            """, (req.name, req.emails, req.subject, req.body_header, req.body_ending, req.id))
+        else:
+            conn.execute("""
+                INSERT INTO mailer_profiles (name, emails, subject, body_header, body_ending)
+                VALUES (?, ?, ?, ?, ?)
+            """, (req.name, req.emails, req.subject, req.body_header, req.body_ending))
         conn.commit()
         return {"status": "success"}
     except Exception as e:
@@ -2263,10 +2280,17 @@ def list_scheduler_jobs():
 def save_scheduler_job(req: SchedulerJobRequest):
     try:
         conn = get_db()
-        conn.execute("""
-            INSERT INTO scheduler_jobs (name, pipeline_id, cron_expression, report_profile_id, mailer_profile_id, enabled)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (req.name, req.pipeline_id, req.cron_expression, req.report_profile_id, req.mailer_profile_id, 1 if req.enabled else 0))
+        if req.id is not None:
+            conn.execute("""
+                UPDATE scheduler_jobs 
+                SET name = ?, pipeline_id = ?, cron_expression = ?, report_profile_id = ?, mailer_profile_id = ?, enabled = ?
+                WHERE id = ?
+            """, (req.name, req.pipeline_id, req.cron_expression, req.report_profile_id, req.mailer_profile_id, 1 if req.enabled else 0, req.id))
+        else:
+            conn.execute("""
+                INSERT INTO scheduler_jobs (name, pipeline_id, cron_expression, report_profile_id, mailer_profile_id, enabled)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (req.name, req.pipeline_id, req.cron_expression, req.report_profile_id, req.mailer_profile_id, 1 if req.enabled else 0))
         conn.commit()
         return {"status": "success"}
     except Exception as e:
