@@ -1129,7 +1129,21 @@
                             <!-- Entities list with checkboxes -->
                             <div style="margin-bottom:1rem;">
                                 <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem;">Select Entities to include in Report</label>
-                                <div id="reportProfileEntitiesList" style="max-height:150px; overflow-y:auto; padding:0.5rem; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
+                                
+                                <!-- Search and Quick Actions -->
+                                <input type="text" id="reportProfileEntitySearch" placeholder="Type to filter entities (e.g. CUSTOMER*)..." oninput="filterReportProfileEntities(this.value)" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.8rem; margin-bottom:0.5rem; outline:none; display:none;">
+                                
+                                <div id="reportProfileEntityActions" style="display:none; justify-content:space-between; align-items:center; font-size:0.8rem; margin-bottom:0.5rem; color:var(--text-secondary);">
+                                    <div style="display:flex; gap:0.75rem;">
+                                        <span onclick="selectAllReportProfileEntities(true)" style="color:var(--accent-blue); cursor:pointer; font-weight:600; text-decoration:underline;">Select All</span>
+                                        <span onclick="selectAllReportProfileEntities(false)" style="color:var(--accent-blue); cursor:pointer; font-weight:600; text-decoration:underline;">Clear All</span>
+                                    </div>
+                                    <div style="font-weight:500;">
+                                        Selected: <span id="reportProfileSelectedCount" style="color:var(--text-primary); font-weight:700;">0</span> / <span id="reportProfileTotalCount">0</span>
+                                    </div>
+                                </div>
+
+                                <div id="reportProfileEntitiesList" style="max-height:200px; overflow-y:auto; padding:0.5rem; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
                                     <span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">Choose a pipeline first...</span>
                                 </div>
                             </div>
@@ -2489,11 +2503,28 @@
                     return;
                 }
                 _allReportProfiles.forEach(p => {
+                    let entitiesHtml = '';
+                    if (p.entities && p.entities.length > 5) {
+                        const preview = p.entities.slice(0, 5).join(', ');
+                        const hiddenCount = p.entities.length - 5;
+                        entitiesHtml = `
+                            <span id="rp-preview-${p.id}">
+                                ${preview} <span style="color:var(--accent-blue); font-weight:600; cursor:pointer; text-decoration:underline;" onclick="toggleProfileEntitiesExpand(${p.id})">(+${hiddenCount} more)</span>
+                            </span>
+                            <span id="rp-full-${p.id}" style="display:none; max-height:80px; overflow-y:auto; font-family:monospace; padding:0.35rem; background:rgba(0,0,0,0.15); border:1px solid var(--border-color); border-radius:6px; font-size:0.75rem;">
+                                ${p.entities.join(', ')} 
+                                <div style="margin-top:0.25rem;"><span style="color:var(--status-error); font-weight:600; cursor:pointer; text-decoration:underline;" onclick="toggleProfileEntitiesExpand(${p.id})">[Collapse]</span></div>
+                            </span>
+                        `;
+                    } else {
+                        entitiesHtml = p.entities ? p.entities.join(', ') : '';
+                    }
+
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td style="padding:0.5rem; border-bottom:1px solid var(--border-color);"><strong>${p.name}</strong></td>
                         <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-family:monospace;">${p.pipeline_id}</td>
-                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.75rem;">${p.entities.join(', ')}</td>
+                        <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.75rem; max-width:300px;">${entitiesHtml}</td>
                         <td style="padding:0.5rem; border-bottom:1px solid var(--border-color); font-size:0.8rem; color:var(--text-secondary);">
                             ${p.skip_if_all_pass ? '✓ Skip if sync' : 'Always send'}
                         </td>
@@ -2515,6 +2546,11 @@
         document.getElementById('reportProfilePipelineSelect').value = '';
         document.getElementById('reportProfileEntitiesList').innerHTML = '<span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">Choose a pipeline first...</span>';
         document.getElementById('reportProfileSkipMail').checked = false;
+        
+        // Reset search/bulk actions
+        document.getElementById('reportProfileEntitySearch').style.display = 'none';
+        document.getElementById('reportProfileEntitySearch').value = '';
+        document.getElementById('reportProfileEntityActions').style.display = 'none';
     };
 
     window.cancelCreateReportProfile = function() {
@@ -2523,11 +2559,19 @@
 
     window.loadReportProfileEntities = async function(pipelineId) {
         const listDiv = document.getElementById('reportProfileEntitiesList');
+        const searchInput = document.getElementById('reportProfileEntitySearch');
+        const actionsDiv = document.getElementById('reportProfileEntityActions');
+        
         if (!pipelineId) {
             listDiv.innerHTML = '<span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">Choose a pipeline first...</span>';
+            searchInput.style.display = 'none';
+            actionsDiv.style.display = 'none';
             return;
         }
         listDiv.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">Loading entity list...</span>';
+        searchInput.style.display = 'none';
+        actionsDiv.style.display = 'none';
+        
         try {
             const res = await fetch(`${API_HOST}/api/pipelines/${pipelineId}/entities`);
             if (res.ok) {
@@ -2537,17 +2581,77 @@
                     listDiv.innerHTML = '<span style="color:var(--text-secondary); font-size:0.8rem; font-style:italic;">No entities in pipeline config.</span>';
                     return;
                 }
+                
                 entities.forEach(ent => {
-                    listDiv.innerHTML += `
-                        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
-                            <input type="checkbox" class="profile-entity-checkbox" value="${ent.entityName}" id="rp-ent-${ent.entityName}" style="cursor:pointer;" checked>
-                            <label for="rp-ent-${ent.entityName}" style="font-size:0.85rem; color:var(--text-primary); cursor:pointer;">${ent.entityName}</label>
-                        </div>
+                    const div = document.createElement('div');
+                    div.className = 'profile-entity-item';
+                    div.setAttribute('data-entity-name', ent.entityName);
+                    div.style.display = 'flex';
+                    div.style.alignItems = 'center';
+                    div.style.gap = '0.5rem';
+                    div.style.marginBottom = '0.25rem';
+                    div.innerHTML = `
+                        <input type="checkbox" class="profile-entity-checkbox" value="${ent.entityName}" id="rp-ent-${ent.entityName}" style="cursor:pointer;" onchange="updateReportProfileSelectedCount()" checked>
+                        <label for="rp-ent-${ent.entityName}" style="font-size:0.85rem; color:var(--text-primary); cursor:pointer;">${ent.entityName}</label>
                     `;
+                    listDiv.appendChild(div);
                 });
+                
+                // Show actions and search
+                searchInput.style.display = 'block';
+                searchInput.value = '';
+                actionsDiv.style.display = 'flex';
+                document.getElementById('reportProfileTotalCount').innerText = entities.length;
+                document.getElementById('reportProfileSelectedCount').innerText = entities.length;
             }
         } catch (err) {
             listDiv.innerHTML = '<span style="color:var(--status-error); font-size:0.8rem;">Error loading entities list.</span>';
+        }
+    };
+
+    window.filterReportProfileEntities = function(query) {
+        const lower = query.toLowerCase().trim();
+        const isWildcard = lower.endsWith('*');
+        const baseQuery = isWildcard ? lower.slice(0, -1) : lower;
+        
+        const items = document.querySelectorAll('.profile-entity-item');
+        items.forEach(item => {
+            const label = item.getAttribute('data-entity-name').toLowerCase();
+            let match = false;
+            if (isWildcard) {
+                match = label.startsWith(baseQuery);
+            } else {
+                match = label.includes(baseQuery);
+            }
+            item.style.display = match ? 'flex' : 'none';
+        });
+    };
+
+    window.selectAllReportProfileEntities = function(check) {
+        const visibleItems = Array.from(document.querySelectorAll('.profile-entity-item'))
+            .filter(item => item.style.display !== 'none');
+            
+        visibleItems.forEach(item => {
+            const cb = item.querySelector('.profile-entity-checkbox');
+            if (cb) cb.checked = check;
+        });
+        updateReportProfileSelectedCount();
+    };
+
+    window.updateReportProfileSelectedCount = function() {
+        const selected = document.querySelectorAll('.profile-entity-checkbox:checked').length;
+        document.getElementById('reportProfileSelectedCount').innerText = selected;
+    };
+
+    window.toggleProfileEntitiesExpand = function(profileId) {
+        const preview = document.getElementById(`rp-preview-${profileId}`);
+        const full = document.getElementById(`rp-full-${profileId}`);
+        if (full.style.display === 'none') {
+            full.style.display = 'block';
+            preview.style.display = 'none';
+        } else {
+            full.style.display = 'none';
+            preview.style.display = 'inline';
         }
     };
 
