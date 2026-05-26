@@ -26,6 +26,35 @@
             --transition: all 0.2s ease;
         }
 
+        /* Config Badges */
+        .config-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.45rem;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            margin-right: 0.25rem;
+            border: 1px solid transparent;
+        }
+        .badge-udf {
+            background-color: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+        .badge-filter {
+            background-color: rgba(236, 72, 153, 0.15);
+            color: #f472b6;
+            border-color: rgba(236, 72, 153, 0.3);
+        }
+        .badge-unlocked {
+            background-color: rgba(234, 179, 8, 0.15);
+            color: #facc15;
+            border-color: rgba(234, 179, 8, 0.3);
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
@@ -60,6 +89,7 @@
             margin-bottom: 0.5rem;
             background: linear-gradient(to right, #60a5fa, #a78bfa);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
@@ -327,6 +357,7 @@
         [data-theme="light"] .title-group h1 { 
             background: linear-gradient(to right, #2563eb, #7c3aed); 
             -webkit-background-clip: text; 
+            background-clip: text;
             -webkit-text-fill-color: transparent; 
         }
         [data-theme="light"] .btn-icon:hover {
@@ -615,6 +646,7 @@
             <nav class="tab-nav" role="tablist">
                 <button class="tab-btn active" id="tab-btn-entities" onclick="switchTab('entities')" role="tab">📋 Entities List</button>
                 <button class="tab-btn" id="tab-btn-verify" onclick="switchTab('verify')" role="tab">🔍 Verify Tool</button>
+                <button class="tab-btn" id="tab-btn-reports" onclick="switchTab('reports')" role="tab">📜 Report History</button>
             </nav>
         </div>
         <div class="controls">
@@ -623,7 +655,7 @@
             </button>
             <div class="config-select">
                 <label for="pipelineSelect">Pipeline:</label>
-                <select id="pipelineSelect" onchange="loadEntities(this.value)">
+                <select id="pipelineSelect" onchange="handlePipelineChange(this.value)">
                     <option value="">Loading...</option>
                 </select>
             </div>
@@ -707,9 +739,11 @@
             <thead>
                 <tr>
                     <th>Status</th>
+                    <th>DB Health</th>
                     <th>Entity Name</th>
                     <th>Source Table</th>
                     <th>Target Table</th>
+                    <th>Configuration</th>
                     <th>Last Replication</th>
                     <th>Journal Seq / CDC ID</th>
                     <th>Throughput</th>
@@ -719,7 +753,7 @@
             </thead>
             <tbody>
                 <tr>
-                    <td colspan="9" style="text-align: center; color: var(--text-secondary);">Loading entities...</td>
+                    <td colspan="11" style="text-align: center; color: var(--text-secondary);">Loading entities...</td>
                 </tr>
             </tbody>
         </table>
@@ -750,6 +784,10 @@
                     <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                     Run Verification
                 </button>
+                <button class="btn-run" id="btnSaveVerify" onclick="saveVerifyReport()" style="display: none; background: linear-gradient(135deg, #10b981 0%, #059669 100%); margin-left: 10px;">
+                    <svg viewBox="0 0 24 24" width="16" height="16" style="fill: white; margin-right: 6px; vertical-align: middle;"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+                    Save to History
+                </button>
             </div>
         </div>
 
@@ -757,6 +795,7 @@
             <table class="verify-table" id="verifyTable">
                 <thead>
                     <tr>
+                        <th rowspan="2" style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllVerify" checked onclick="toggleAllVerifyCheckboxes(this.checked)"></th>
                         <th rowspan="2">Mode</th>
                         <th rowspan="2">Entity Name</th>
                         <th colspan="2" class="group-header">Source (AS400)</th>
@@ -772,12 +811,83 @@
                     </tr>
                 </thead>
                 <tbody id="verifyTbody">
-                    <tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:2rem">Select a pipeline and click <strong>Run Verification</strong> to start</td></tr>
+                    <tr><td colspan="9" style="text-align:center;color:var(--text-secondary);padding:2rem">Select a pipeline and click <strong>Run Verification</strong> to start</td></tr>
                 </tbody>
             </table>
         </div>
 
     </div><!-- /tab-verify -->
+
+    <!-- ══ TAB 3: Report History ══ -->
+    <div id="tab-reports" class="tab-panel hidden" role="tabpanel">
+        <div class="verify-toolbar">
+            <h2>Saved Verification Reports</h2>
+            <div class="toolbar-right">
+                <span class="verify-status-label" id="reportsStatusLabel">Select pipeline to view history</span>
+            </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div style="display:flex; gap:0.75rem; align-items:center; margin-bottom:1rem; flex-wrap:wrap;">
+            <input type="text" id="reportFilterText" placeholder="🔍 Search entity…"
+                style="flex:1; min-width:180px; padding:0.45rem 0.75rem; border-radius:8px;
+                       background:var(--bg-secondary); border:1px solid var(--border-color);
+                       color:var(--text-primary); font-size:0.85rem; outline:none;"
+                onkeydown="if(event.key === 'Enter') filterReportHistory()">
+            <button onclick="filterReportHistory()"
+                style="padding:0.45rem 0.9rem; border-radius:8px; border:none; cursor:pointer;
+                       background:var(--accent-blue); color:#fff; font-size:0.85rem; font-weight:600;
+                       transition: opacity 0.15s;" onmouseover="this.style.opacity=.8" onmouseout="this.style.opacity=1">
+                Apply
+            </button>
+            <input type="datetime-local" id="reportFilterFrom" onchange="filterReportHistory()"
+                style="padding:0.45rem 0.75rem; border-radius:8px; background:var(--bg-secondary);
+                       border:1px solid var(--border-color); color:var(--text-primary); font-size:0.85rem;"
+                title="From date/time">
+            <input type="datetime-local" id="reportFilterTo" onchange="filterReportHistory()"
+                style="padding:0.45rem 0.75rem; border-radius:8px; background:var(--bg-secondary);
+                       border:1px solid var(--border-color); color:var(--text-primary); font-size:0.85rem;"
+                title="To date/time">
+            <select id="reportFilterStatus" onchange="filterReportHistory()"
+                style="padding:0.45rem 0.75rem; border-radius:8px; background:var(--bg-secondary);
+                       border:1px solid var(--border-color); color:var(--text-primary); font-size:0.85rem;">
+                <option value="">All Statuses</option>
+                <option value="pass">✓ Pass (All In Sync)</option>
+                <option value="fail">✗ Has Discrepancy</option>
+            </select>
+            <button onclick="loadReports(selectedPipelineId)"
+                style="padding:0.45rem 0.9rem; border-radius:8px; border:none; cursor:pointer;
+                       background:var(--bg-secondary); border:1px solid var(--border-color); color:var(--text-primary); font-size:0.85rem; font-weight:600;">
+                ↻ Refresh
+            </button>
+        </div>
+
+        <!-- Summary Bar -->
+        <div id="reportsSummaryBar" style="display:none; gap:1rem; margin-bottom:1rem; flex-wrap:wrap;"
+             class="summary-bar">
+            <span id="reportsSummaryTotal" style="color:var(--text-secondary); font-size:0.85rem;"></span>
+            <span id="reportsSummaryPass" style="color:var(--status-running); font-size:0.85rem;"></span>
+            <span id="reportsSummaryFail" style="color:var(--status-error); font-size:0.85rem;"></span>
+        </div>
+
+        <div class="table-container">
+            <table class="verify-table" id="reportsTable">
+                <thead>
+                    <tr>
+                        <th>Pipeline</th>
+                        <th>Created At</th>
+                        <th>Entities</th>
+                        <th>Summary</th>
+                        <th>Size</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="reportsTbody">
+                    <tr><td colspan="6" style="text-align:center;color:var(--text-secondary);padding:2rem">No reports saved yet.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div><!-- /tab-reports -->
 
 </div>
 
@@ -791,6 +901,7 @@
     let selectedPipelineId = '';
     let activeSocket = null;
     const entityThroughputs = {}; // Cache to compute rates over time
+    const pipelineNames = {};
 
     // Theme Toggle Logic
     const themeToggle = document.getElementById('themeToggle');
@@ -861,11 +972,12 @@
             
             if (!pipelines || pipelines.length === 0) {
                 select.innerHTML = '<option value="">No pipelines active</option>';
-                document.querySelector('tbody').innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-secondary);">No pipelines found</td></tr>';
+                document.querySelector('tbody').innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-secondary);">No pipelines found</td></tr>';
                 return;
             }
 
             pipelines.forEach(p => {
+                pipelineNames[p.pipelineId] = p.name || p.pipelineId;
                 const opt = document.createElement('option');
                 opt.value = p.pipelineId;
                 opt.textContent = p.name || p.pipelineId;
@@ -874,11 +986,47 @@
 
             // Automatically load first pipeline
             select.value = pipelines[0].pipelineId;
-            await loadEntities(pipelines[0].pipelineId);
+            handlePipelineChange(pipelines[0].pipelineId);
         } catch (err) {
             console.error("Error fetching pipelines:", err);
             document.getElementById('pipelineSelect').innerHTML = '<option value="">Error connecting to API</option>';
-            document.querySelector('tbody').innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--status-error);">Could not connect to backend server. Verify container is running on port 8000.</td></tr>';
+            document.querySelector('tbody').innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--status-error);">Could not connect to backend server. Verify container is running on port 8000.</td></tr>';
+        }
+    }
+
+    // Unified pipeline change handler - works for both tabs
+    function handlePipelineChange(pipelineId) {
+        console.log('[Pipeline] Changed to:', pipelineId);
+        
+        // Update global selectedPipelineId
+        selectedPipelineId = pipelineId;
+        
+        // Sync both dropdowns (header and verify tab if it exists)
+        const headerSelect = document.getElementById('pipelineSelect');
+        const verifySelect = document.getElementById('verifyPipelineSelect');
+        
+        if (headerSelect) headerSelect.value = pipelineId;
+        if (verifySelect) verifySelect.value = pipelineId;
+        
+        // Load entities for Dashboard tab
+        loadEntities(pipelineId);
+        
+        // If Verify tab is currently visible, reload its data too
+        const verifyTab = document.getElementById('tab-verify');
+        if (verifyTab && !verifyTab.classList.contains('hidden')) {
+            console.log('[Pipeline] Verify tab is visible, reloading...');
+            loadVerifyMetadata(pipelineId).catch(err => {
+                console.error('[Pipeline] Error loading verify metadata:', err);
+            });
+        }
+        
+        // If Report History tab is currently visible, reload its data too
+        const reportsTab = document.getElementById('tab-reports');
+        if (reportsTab && !reportsTab.classList.contains('hidden')) {
+            console.log('[Pipeline] Reports tab is visible, reloading...');
+            loadReports(pipelineId).catch(err => {
+                console.error('[Pipeline] Error loading reports:', err);
+            });
         }
     }
 
@@ -887,7 +1035,7 @@
         selectedPipelineId = pipelineId;
         
         // Show loading state
-        document.querySelector('tbody').innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-secondary);">Loading entities...</td></tr>';
+        document.querySelector('tbody').innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-secondary);">Loading entities...</td></tr>';
         
         try {
             const res = await fetch(`${API_HOST}/api/pipelines/${pipelineId}/entities`);
@@ -901,7 +1049,7 @@
             connectWebSocket(pipelineId, allEntities);
         } catch (err) {
             console.error("Error loading entities:", err);
-            document.querySelector('tbody').innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--status-error);">Error loading pipeline entities.</td></tr>';
+            document.querySelector('tbody').innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--status-error);">Error loading pipeline entities.</td></tr>';
         }
     }
 
@@ -943,11 +1091,21 @@
 
     function applyFiltersAndRender() {
         const selected = Array.from(document.querySelectorAll('.group-checkbox:checked')).map(cb => cb.value);
-        const nameFilter = document.getElementById('filterEntity').value.toLowerCase().replace(/\*/g, '');
+        const rawFilter = document.getElementById('filterEntity').value;
+        const isPrefixSearch = rawFilter.endsWith('*');
+        const nameFilter = rawFilter.toLowerCase().replace(/\*/g, '');
 
         const filtered = allEntities.filter(e => {
             const groupMatches = selected.length === 0 || selected.includes(e.groupId || '_default');
-            const nameMatches = !nameFilter || (e.entityName || '').toLowerCase().includes(nameFilter);
+            const entityName = (e.entityName || '').toLowerCase();
+            let nameMatches = !nameFilter;
+            if (nameFilter) {
+                if (isPrefixSearch) {
+                    nameMatches = entityName.startsWith(nameFilter);
+                } else {
+                    nameMatches = entityName.includes(nameFilter);
+                }
+            }
             return groupMatches && nameMatches;
         });
 
@@ -960,7 +1118,7 @@
         tbody.innerHTML = '';
 
         if (entities.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-secondary);">No entities matched your filters.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-secondary);">No entities matched your filters.</td></tr>';
             return;
         }
 
@@ -971,14 +1129,66 @@
 
             const status = (ent.status || 'STOPPED').toUpperCase();
             let statusClass = 'status-stopped';
-            if (status === 'RUNNING' || status === 'ACTIVE') statusClass = 'status-running';
-            else if (status === 'ERROR') statusClass = 'status-error';
+            let statusText = 'Pause';
+            if (status === 'RUNNING' || status === 'ACTIVE') {
+                statusClass = 'status-running';
+                statusText = 'Active';
+            } else if (status === 'ERROR') {
+                statusClass = 'status-error';
+                statusText = 'Error';
+            }
 
             const srcAgent = ent.agentEntities && ent.agentEntities[0] ? ent.agentEntities[0] : null;
             const tgtAgent = ent.agentEntities && ent.agentEntities[1] ? ent.agentEntities[1] : null;
 
             const srcTable = srcAgent ? `${srcAgent.table?.schema || 'QSYS'}.${srcAgent.table?.name || 'TABLE'}` : '-';
             const tgtTable = tgtAgent ? `${tgtAgent.table?.schema || 'dbo'}.${tgtAgent.table?.name || 'TABLE'}` : '-';
+
+            // Extract configuration flags
+            const hasUdf = tgtAgent && tgtAgent.entityType && tgtAgent.entityType.mappingFunctionInfo;
+            const hasFilter = tgtAgent && tgtAgent.entityType && tgtAgent.entityType.filter && tgtAgent.entityType.filter.clauses && tgtAgent.entityType.filter.clauses.length > 0;
+            
+            const targetTableId = tgtAgent && tgtAgent.table && tgtAgent.table.id;
+            const unlockedSchemas = tgtAgent && tgtAgent.entityType && tgtAgent.entityType.tablesWithUnlockedSchema;
+            const isSchemaUnlocked = targetTableId && unlockedSchemas && unlockedSchemas.includes(targetTableId);
+
+            let configHtml = '';
+            if (hasUdf) {
+                configHtml += `<span class="config-badge badge-udf" title="User Defined Function: ${tgtAgent.entityType.mappingFunctionInfo.name}">UDF</span>`;
+            }
+            if (hasFilter) {
+                configHtml += `<span class="config-badge badge-filter" title="Filtering enabled on columns/rows">Filter</span>`;
+            }
+            if (isSchemaUnlocked) {
+                configHtml += `<span class="config-badge badge-unlocked" title="Target schema is unlocked (dynamic mapping active)">Unlck</span>`;
+            }
+            if (!configHtml) {
+                configHtml = '<span style="color: var(--text-secondary); font-style: italic; font-size: 0.75rem;">Standard</span>';
+            }
+
+            // Build DB health badge from targetAgentHealth (injected by REST API)
+            const tgtHealth = ent.targetAgentHealth;
+            let healthHtml = '<span style="color:var(--text-secondary);font-size:0.75rem">—</span>';
+            if (tgtHealth) {
+                const connStatus = tgtHealth.connectionStatus || 'UNKNOWN';
+                const healthStatus = tgtHealth.healthStatus || 'UNKNOWN';
+                const dbHost = tgtHealth.connectedDbHost || '';
+                const dbName = tgtHealth.connectedDbName || '';
+                const connErr = tgtHealth.connectionError || '';
+                const isConn = connStatus === 'CONNECTED';
+                const isHealthy = healthStatus === 'HEALTHY';
+                const connColor = isConn ? 'var(--status-running)' : (connStatus === 'UNKNOWN' ? 'var(--text-secondary)' : 'var(--status-error)');
+                const connIcon = isConn ? '●' : (connStatus === 'UNKNOWN' ? '○' : '✕');
+                const tooltip = connErr
+                    ? `${connStatus} — Error: ${connErr}`
+                    : `${connStatus} / ${healthStatus}${dbHost ? ' — ' + dbHost : ''}${dbName ? '/' + dbName : ''}`;
+                healthHtml = `<span class="db-health-badge" title="${tooltip}"
+                    style="display:inline-flex;align-items:center;gap:4px;font-size:0.78rem;font-weight:600;
+                           color:${connColor};cursor:default;">
+                    <span style="font-size:0.7rem">${connIcon}</span>
+                    ${isConn ? (isHealthy ? 'OK' : 'Degraded') : (connStatus === 'UNKNOWN' ? 'N/A' : 'Offline')}
+                </span>`;
+            }
 
             const isRunning = status === 'RUNNING' || status === 'ACTIVE';
             const actionBtn = isRunning
@@ -990,10 +1200,12 @@
                    </button>`;
 
             tr.innerHTML = `
-                <td><span class="status-badge ${statusClass}">${status}</span></td>
+                <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                <td class="agent-health-cell">${healthHtml}</td>
                 <td><span class="entity-name">${ent.entityName}</span><span class="sub-text">Group: ${ent.groupId || 'default'}</span></td>
                 <td><span class="mono-text">${srcTable}</span></td>
                 <td><span class="mono-text">${tgtTable}</span></td>
+                <td>${configHtml}</td>
                 <td class="last-replication">Pending metrics<span class="sub-text">-</span></td>
                 <td class="journal-seq"><span class="mono-text">-</span></td>
                 <td class="throughput">0 rec/s<span class="sub-text">0 total</span></td>
@@ -1092,30 +1304,83 @@
         const msgType = msg.Field_1_string;
 
         if (msgType === "EntityStatusMessage") {
-            const inner = msg.Field_2_message?.Field_1_message?.Field_1_message;
-            if (!inner) return;
+            // EntityStatusMessage -> Field_2_message (content) -> Field_1_message (entitiesStatus list)
+            // Each EntityStatus: Field_2=entityId, Field_3=isMigrationActive,
+            //                    Field_4=isSyncActive, Field_5=isBusy
+            const content = msg.Field_2_message?.Field_1_message;
+            if (!content) return;
 
-            const entityIdOrName = inner.Field_2_string;
-            const statusVal = inner.Field_4_varint; // 1 = ACTIVE/RUNNING, 0 = STOPPED
+            // Handle both list and single entity status
+            const items = content.Field_1_message_list || (content.Field_1_message ? [content.Field_1_message] : []);
+            items.forEach(item => {
+                if (!item) return;
+                const entityIdOrName = item.Field_2_string;
+                const isMigration = !!item.Field_3_varint;
+                const isSyncActive = !!item.Field_4_varint;
+                const isBusy = !!item.Field_5_varint;
 
-            // Locate the correct row
-            const row = document.querySelector(`tr[data-entity-id="${entityIdOrName}"], tr[data-entity-name="${entityIdOrName}"]`);
-            if (row) {
-                const badge = row.querySelector('.status-badge');
-                const actionCell = row.querySelector('.action-cell');
-                const isRunning = statusVal === 1;
+                const isRunning = isSyncActive;
+                const statusText = isSyncActive ? 'Active' : (isMigration ? 'Migration' : (isBusy ? 'Busy' : 'Pause'));
+                const statusClass = isSyncActive ? 'status-running' : (isBusy || isMigration ? 'status-busy' : 'status-stopped');
 
-                badge.className = `status-badge ${isRunning ? 'status-running' : 'status-stopped'}`;
-                badge.textContent = isRunning ? 'RUNNING' : 'STOPPED';
+                const row = document.querySelector(`tr[data-entity-id="${entityIdOrName}"], tr[data-entity-name="${entityIdOrName}"]`);
+                if (row) {
+                    const badge = row.querySelector('.status-badge');
+                    const actionCell = row.querySelector('.action-cell');
+                    if (badge) {
+                        badge.className = `status-badge ${statusClass}`;
+                        badge.textContent = statusText;
+                    }
+                    if (actionCell) {
+                        actionCell.innerHTML = isRunning
+                            ? `<button class="btn-icon btn-pause" title="Pause Replication" onclick="toggleEntityReplication('${row.getAttribute('data-entity-name')}', true)">
+                                   <svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                               </button>`
+                            : `<button class="btn-icon btn-play" title="Start Replication" onclick="toggleEntityReplication('${row.getAttribute('data-entity-name')}', false)">
+                                   <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                               </button>`;
+                    }
+                }
+            });
 
-                actionCell.innerHTML = isRunning
-                    ? `<button class="btn-icon btn-pause" title="Pause Replication" onclick="toggleEntityReplication('${row.getAttribute('data-entity-name')}', true)">
-                           <svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                       </button>`
-                    : `<button class="btn-icon btn-play" title="Start Replication" onclick="toggleEntityReplication('${row.getAttribute('data-entity-name')}', false)">
-                           <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                       </button>`;
-            }
+        } else if (msgType === "AgentInformationMessage") {
+            // AgentInformationMessage: Field_2_message (content) -> Field_1_message (agentInformation)
+            // AgentInformation: Field_1=agentId, Field_5=connectedDatabaseHost,
+            //   Field_6=connectedDatabaseName, Field_8=status(0=HEALTHY,1=UNHEALTHY),
+            //   Field_10=connectionStatus(0=CONNECTED,1=DISCONNECTED), Field_12=connectionError
+            const agentInfo = msg.Field_2_message?.Field_1_message;
+            if (!agentInfo) return;
+
+            const agentId = agentInfo.Field_1_string || '';
+            const dbHost = agentInfo.Field_5_string || '';
+            const dbName = agentInfo.Field_6_string || '';
+            const healthVal = agentInfo.Field_8_varint ?? -1;
+            const connVal = agentInfo.Field_10_varint ?? -1;
+            const connErr = agentInfo.Field_12_string || '';
+
+            const connStatus = connVal === 0 ? 'CONNECTED' : (connVal === 1 ? 'DISCONNECTED' : 'UNKNOWN');
+            const healthStatus = healthVal === 0 ? 'HEALTHY' : (healthVal === 1 ? 'UNHEALTHY' : 'UNKNOWN');
+            const isConn = connStatus === 'CONNECTED';
+            const isHealthy = healthStatus === 'HEALTHY';
+
+            const connColor = isConn ? 'var(--status-running)' : (connStatus === 'UNKNOWN' ? 'var(--text-secondary)' : 'var(--status-error)');
+            const connIcon = isConn ? '●' : (connStatus === 'UNKNOWN' ? '○' : '✕');
+            const label = isConn ? (isHealthy ? 'OK' : 'Degraded') : (connStatus === 'UNKNOWN' ? 'N/A' : 'Offline');
+            const tooltip = connErr
+                ? `${connStatus} — Error: ${connErr}`
+                : `${connStatus} / ${healthStatus}${dbHost ? ' — ' + dbHost : ''}${dbName ? '/' + dbName : ''}`;
+            const healthHtml = `<span class="db-health-badge" title="${tooltip}"
+                style="display:inline-flex;align-items:center;gap:4px;font-size:0.78rem;font-weight:600;
+                       color:${connColor};cursor:default;">
+                <span style="font-size:0.7rem">${connIcon}</span>${label}
+            </span>`;
+
+            // Update ALL rows' health cell — agent health applies to all entities in the pipeline
+            // (same target DB for all entities)
+            document.querySelectorAll('td.agent-health-cell').forEach(cell => {
+                cell.innerHTML = healthHtml;
+            });
+
         } else if (msgType === "MetricsMessage") {
             const inner = msg.Field_2_message?.Field_1_message?.Field_1_message?.Field_2_message;
             if (!inner) return;
@@ -1152,7 +1417,6 @@
                 // Update CDC Journal info
                 const journalCell = row.querySelector('.journal-seq');
                 if (journalCell) {
-                    // Fake/Display a rotating CDC tag or just show the active status
                     journalCell.innerHTML = `<span class="mono-text">ACTIVE_CDC</span>`;
                 }
 
@@ -1183,32 +1447,251 @@
         document.getElementById(`tab-${tabName}`).classList.remove('hidden');
         document.getElementById(`tab-btn-${tabName}`).classList.add('active');
 
+        // If switching to Verify tab and we have a pipeline selected, load its data
         if (tabName === 'verify' && selectedPipelineId) {
-            loadVerifyMetadata(selectedPipelineId);
+            console.log('[Tab] Switched to Verify tab, loading pipeline:', selectedPipelineId);
+            loadVerifyMetadata(selectedPipelineId).catch(err => {
+                console.error('[Tab] Error loading verify metadata:', err);
+            });
+        } else if (tabName === 'reports') {
+            console.log('[Tab] Switched to Reports tab, loading pipeline reports:', selectedPipelineId);
+            loadReports(selectedPipelineId).catch(err => {
+                console.error('[Tab] Error loading reports:', err);
+            });
+        }
+    }
+
+    // ── Reports History & Save Functions ──
+    let _allReports = []; // cache for filtering
+
+    function _parseReportTimestamp(utcStr) {
+        // utcStr = "YYYY-MM-DD HH:MM:SS ICT" (local timezone from backend)
+        if (!utcStr || utcStr === 'Unknown') return { local: utcStr, iso: '' };
+        try {
+            // Parse as local time (no Z suffix needed)
+            const parts = utcStr.split(' ')[0] + 'T' + utcStr.split(' ')[1];
+            const d = new Date(parts);
+            const local = d.toLocaleString(undefined, {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
+            });
+            return { local, iso: parts };
+        } catch { return { local: utcStr, iso: '' }; }
+    }
+
+    async function loadReports(pipelineId) {
+        const tbody = document.getElementById('reportsTbody');
+        const label = document.getElementById('reportsStatusLabel');
+        const summaryBar = document.getElementById('reportsSummaryBar');
+        
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);padding:1.5rem">Loading report history...</td></tr>';
+        label.textContent = 'Loading...';
+        summaryBar.style.display = 'none';
+
+        try {
+            const search = document.getElementById('reportFilterText').value || '';
+            const status = document.getElementById('reportFilterStatus').value || '';
+            const fromDate = document.getElementById('reportFilterFrom').value || '';
+            const toDate = document.getElementById('reportFilterTo').value || '';
+
+            const params = new URLSearchParams();
+            if (pipelineId) params.append('pipeline_id', pipelineId);
+            if (search) params.append('search', search);
+            if (status) params.append('status', status);
+            if (fromDate) params.append('from_date', fromDate);
+            if (toDate) params.append('to_date', toDate);
+
+            const url = `${API_HOST}/api/reports?${params.toString()}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            _allReports = await res.json();
+            
+            if (_allReports.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);padding:2rem">No reports saved yet or matched your search.</td></tr>';
+                label.textContent = 'No reports found';
+                return;
+            }
+            label.textContent = `${_allReports.length} report(s) loaded`;
+            renderReportRows(_allReports);
+        } catch (err) {
+            console.error('Error loading reports:', err);
+            tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--status-error);padding:1.5rem">Error: ${err.message}</td></tr>`;
+            label.textContent = 'Error loading reports';
+        }
+    }
+
+    function renderReportRows(reports) {
+        const tbody = document.getElementById('reportsTbody');
+        const summaryBar = document.getElementById('reportsSummaryBar');
+        tbody.innerHTML = '';
+
+        if (!reports.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);padding:2rem">No matching reports.</td></tr>';
+            summaryBar.style.display = 'none';
+            return;
+        }
+
+        // Infer pass/fail from filename size heuristic — we tag in future; for now mark unknown
+        let passCount = 0, failCount = 0;
+        reports.forEach(rep => {
+            const sizeKb = (rep.size_bytes / 1024).toFixed(1);
+            const reportUrl = `${API_HOST}${rep.url}`;
+            const name = rep.pipeline_name || pipelineNames[rep.pipeline_id] || rep.pipeline_id;
+            const { local } = _parseReportTimestamp(rep.created_at);
+            const entityCount = rep.entity_count || 0;
+            
+            // Summary badge — we'll mark pass if filename contains no known issue marker
+            const summaryHtml = rep.summary_status === 'pass'
+                ? '<span style="color:var(--status-running);font-weight:600">✓ All In Sync</span>'
+                : rep.summary_status === 'fail'
+                    ? '<span style="color:var(--status-error);font-weight:600">✗ Has Diff</span>'
+                    : '<span style="color:var(--text-secondary);font-size:0.8rem">—</span>';
+            if (rep.summary_status === 'pass') passCount++;
+            else if (rep.summary_status === 'fail') failCount++;
+
+            const tr = document.createElement('tr');
+            tr.setAttribute('data-report-pipeline', rep.pipeline_id);
+            tr.setAttribute('data-report-status', rep.summary_status || '');
+            tr.setAttribute('data-report-timestamp', rep.created_at);
+            tr.innerHTML = `
+                <td><span class="mono-text">${name}</span></td>
+                <td><strong>${local}</strong></td>
+                <td><span class="mono-text">${entityCount}</span></td>
+                <td>${summaryHtml}</td>
+                <td><span class="mono-text">${sizeKb} KB</span></td>
+                <td>
+                    <a href="${reportUrl}" target="_blank"
+                       style="display:inline-block; padding:0.35rem 0.85rem; border-radius:6px;
+                              background:var(--accent-blue); color:#fff; font-size:0.8rem;
+                              font-weight:600; text-decoration:none; white-space:nowrap;
+                              transition:opacity 0.15s;" onmouseover="this.style.opacity=.8" onmouseout="this.style.opacity=1">
+                        Open ↗
+                    </a>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        // Update summary bar
+        summaryBar.style.display = 'flex';
+        document.getElementById('reportsSummaryTotal').textContent = `📄 ${reports.length} report(s)`;
+        document.getElementById('reportsSummaryPass').textContent = passCount ? `✓ ${passCount} Pass` : '';
+        document.getElementById('reportsSummaryFail').textContent = failCount ? `✗ ${failCount} Fail` : '';
+    }
+
+    function filterReportHistory() {
+        loadReports(selectedPipelineId);
+    }
+
+    async function saveVerifyReport() {
+        if (!selectedPipelineId) {
+            alert('Please select a pipeline first.');
+            return;
+        }
+
+        const saveBtn = document.getElementById('btnSaveVerify');
+        const label = document.getElementById('verifyStatusLabel');
+        const originalHtml = saveBtn.innerHTML;
+
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = 'Saving...';
+
+        try {
+            const res = await fetch(`${API_HOST}/api/verify/${selectedPipelineId}/save`, { method: 'POST' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            
+            label.textContent = `✓ Report saved to history folder successfully!`;
+            saveBtn.innerHTML = 'Saved ✓';
+            setTimeout(() => {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = originalHtml;
+                saveBtn.style.display = 'none'; // Hide it after successful save
+            }, 3000);
+            
+            // Pre-load the reports list so it's fresh if they switch tabs
+            loadReports(selectedPipelineId).catch(() => {});
+        } catch (err) {
+            console.error('Error saving report:', err);
+            alert(`Failed to save report: ${err.message}`);
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = originalHtml;
         }
     }
 
     // ── Verify Tool ──
     let verifyEntities = [];
 
+    // Helper functions for Select All verify checkboxes
+    window.toggleAllVerifyCheckboxes = function(checked) {
+        document.querySelectorAll('.verify-entity-checkbox').forEach(cb => {
+            if (!cb.disabled) {
+                cb.checked = checked;
+            }
+        });
+    };
+
+    window.updateSelectAllVerifyHeader = function() {
+        const checkboxes = document.querySelectorAll('.verify-entity-checkbox');
+        const checkedCount = document.querySelectorAll('.verify-entity-checkbox:checked').length;
+        const selectAll = document.getElementById('selectAllVerify');
+        if (selectAll) {
+            selectAll.checked = checkedCount === checkboxes.length;
+            selectAll.indeterminate = checkedCount > 0 && checkedCount < checkboxes.length;
+        }
+    };
+
     async function loadVerifyMetadata(pipelineId) {
-        if (!pipelineId) return;
+        console.log('[Verify] loadVerifyMetadata called with pipelineId:', pipelineId);
+        
+        if (!pipelineId) {
+            console.log('[Verify] pipelineId is empty, returning early');
+            return;
+        }
+        
         const tbody = document.getElementById('verifyTbody');
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:1.5rem">Loading entity metadata...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-secondary);padding:1.5rem">Loading entity metadata...</td></tr>';
+        console.log('[Verify] Showing loading state');
 
         try {
-            const res = await fetch(`${API_HOST}/api/pipelines/${pipelineId}/entities`);
+            const url = `${API_HOST}/api/pipelines/${pipelineId}/entities`;
+            console.log('[Verify] Fetching entities from:', url);
+            
+            const res = await fetch(url);
+            console.log('[Verify] API response status:', res.status);
+            
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            
             verifyEntities = await res.json();
+            console.log('[Verify] Received', verifyEntities.length, 'entities');
+            
             renderVerifyMetadata(verifyEntities);
+            console.log('[Verify] Metadata rendered successfully');
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--status-error);padding:1.5rem">Error loading entities: ${err.message}</td></tr>`;
+            console.error('[Verify] ERROR loading metadata:', err);
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--status-error);padding:1.5rem">Error loading entities: ${err.message}</td></tr>`;
         }
     }
 
     function renderVerifyMetadata(entities) {
         const tbody = document.getElementById('verifyTbody');
         tbody.innerHTML = '';
+
+        if (!entities || entities.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-secondary);padding:2rem">This pipeline has no entities configured</td></tr>';
+            document.getElementById('verifyStatusLabel').textContent = 'No entities to verify';
+            console.log('[Verify] No entities to render');
+            return;
+        }
+
+        // Reset the select all header
+        const selectAll = document.getElementById('selectAllVerify');
+        if (selectAll) {
+            selectAll.checked = true;
+            selectAll.indeterminate = false;
+            selectAll.disabled = false;
+        }
 
         entities.forEach(ent => {
             const srcAgent = ent.agentEntities?.[0] || null;
@@ -1234,6 +1717,7 @@
             tr.dataset.entityId = ent.entityId;
             tr.dataset.entityName = ent.entityName;
             tr.innerHTML = `
+                <td style="text-align: center;"><input type="checkbox" class="verify-entity-checkbox" data-entity="${ent.entityName}" checked onchange="updateSelectAllVerifyHeader()"></td>
                 <td>${modeBadge}</td>
                 <td><strong>${ent.entityName}</strong></td>
                 <td><span class="mono-text">${srcTable}</span></td>
@@ -1264,15 +1748,60 @@
             await loadVerifyMetadata(selectedPipelineId);
         }
 
+        // Hide save button on new run
+        document.getElementById('btnSaveVerify').style.display = 'none';
+
+        // 1. Disable all checkboxes during run
+        document.querySelectorAll('.verify-entity-checkbox').forEach(cb => cb.disabled = true);
+        const selectAll = document.getElementById('selectAllVerify');
+        if (selectAll) selectAll.disabled = true;
+
+        // 2. Identify selected (non-skipped) entities
+        const selectedCheckboxes = Array.from(document.querySelectorAll('.verify-entity-checkbox:checked'));
+        const selectedEntities = selectedCheckboxes.map(cb => cb.dataset.entity);
+        const skippedCheckboxes = Array.from(document.querySelectorAll('.verify-entity-checkbox:not(:checked)'));
+
+        // Reset all rows
+        document.querySelectorAll('.src-count-cell, .tgt-count-cell, .diff-cell, .vstatus-cell').forEach(cell => {
+            cell.innerHTML = '<span class="val-loading">—</span>';
+        });
+
+        // 3. Instantly mark unchecked ones as "Skipped" in the UI
+        skippedCheckboxes.forEach(cb => {
+            const name = cb.dataset.entity;
+            const srcCell  = document.querySelector(`.src-count-cell[data-entity="${name}"]`);
+            const tgtCell  = document.querySelector(`.tgt-count-cell[data-entity="${name}"]`);
+            const diffCell = document.querySelector(`.diff-cell[data-entity="${name}"]`);
+            const vCell    = document.querySelector(`.vstatus-cell[data-entity="${name}"]`);
+            
+            if (srcCell) srcCell.innerHTML = '<span style="color: var(--text-secondary); font-style: italic;">Skipped</span>';
+            if (tgtCell) tgtCell.innerHTML = '<span style="color: var(--text-secondary); font-style: italic;">Skipped</span>';
+            if (diffCell) diffCell.innerHTML = '<span style="color: var(--text-secondary); font-style: italic;">—</span>';
+            if (vCell) vCell.innerHTML = '<span class="mode-badge mode-none">SKIPPED</span>';
+        });
+
+        if (selectedEntities.length === 0) {
+            label.textContent = 'Error: No entities selected to verify.';
+            btn.disabled = false;
+            document.querySelectorAll('.verify-entity-checkbox').forEach(cb => cb.disabled = false);
+            if (selectAll) selectAll.disabled = false;
+            return;
+        }
+
         try {
-            // 1. Start the async job (returns immediately)
-            const startRes = await fetch(`${API_HOST}/api/verify/${selectedPipelineId}/run`, { method: 'POST' });
+            // 4. Start the async job with JSON body of selected entities
+            const startRes = await fetch(`${API_HOST}/api/verify/${selectedPipelineId}/run`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entities: selectedEntities })
+            });
+            
             if (!startRes.ok) throw new Error(`Start failed: HTTP ${startRes.status}`);
             const job = await startRes.json();
             label.textContent = `Running... 0 / ${job.total} complete`;
             btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 4V2A10 10 0 0 0 2 12h2a8 8 0 0 1 8-8z"/></svg> Running...';
 
-            // 2. Poll /results every 2s and update table rows as they arrive
+            // 5. Poll /results every 2s and update table rows as they arrive
             let lastSeen = 0;
             const pollInterval = setInterval(async () => {
                 try {
@@ -1293,6 +1822,13 @@
                         label.textContent = `✓ Done at ${ts} — ${state.total} entities checked`;
                         btn.disabled = false;
                         btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Run Verification';
+                        
+                        // Re-enable checkboxes
+                        document.querySelectorAll('.verify-entity-checkbox').forEach(cb => cb.disabled = false);
+                        if (selectAll) selectAll.disabled = false;
+                        
+                        // Show save button when finished
+                        document.getElementById('btnSaveVerify').style.display = 'inline-flex';
                     }
                 } catch (e) {
                     console.error('Poll error:', e);
@@ -1303,6 +1839,8 @@
             label.textContent = `Error: ${err.message}`;
             btn.disabled = false;
             btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Run Verification';
+            document.querySelectorAll('.verify-entity-checkbox').forEach(cb => cb.disabled = false);
+            if (selectAll) selectAll.disabled = false;
         }
     }
 
