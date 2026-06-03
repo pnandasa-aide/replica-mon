@@ -907,12 +907,12 @@
                 <thead>
                     <tr>
                         <th rowspan="2" style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllVerify" checked onclick="toggleAllVerifyCheckboxes(this.checked)"></th>
-                        <th rowspan="2">Mode</th>
+                        <th rowspan="2">Status</th>
                         <th rowspan="2">Entity Name</th>
                         <th colspan="2" class="group-header">Source (AS400)</th>
                         <th colspan="2" class="group-header">Target (MSSQL)</th>
                         <th rowspan="2">Difference</th>
-                        <th rowspan="2">Status</th>
+                        <th rowspan="2">Verification</th>
                     </tr>
                     <tr>
                         <th>Table</th>
@@ -1683,10 +1683,28 @@
                 const statusText = isSyncActive ? 'Active' : (isMigration ? 'Migration' : (isBusy ? 'Busy' : 'Pause'));
                 const statusClass = isSyncActive ? 'status-running' : (isBusy || isMigration ? 'status-busy' : 'status-stopped');
 
-                const row = document.querySelector(`tr[data-entity-id="${entityIdOrName}"], tr[data-entity-name="${entityIdOrName}"]`);
-                if (row) {
+                // Update local entities caches
+                const statusStr = isRunning ? 'RUNNING' : (isMigration ? 'MIGRATING' : (isBusy ? 'BUSY' : 'STOPPED'));
+                
+                if (typeof allEntities !== 'undefined' && Array.isArray(allEntities)) {
+                    const cachedEnt = allEntities.find(e => e.entityId === entityIdOrName || e.entityName === entityIdOrName);
+                    if (cachedEnt) {
+                        cachedEnt.status = statusStr;
+                    }
+                }
+                if (typeof verifyEntities !== 'undefined' && Array.isArray(verifyEntities)) {
+                    const cachedVerifyEnt = verifyEntities.find(e => e.entityId === entityIdOrName || e.entityName === entityIdOrName);
+                    if (cachedVerifyEnt) {
+                        cachedVerifyEnt.status = statusStr;
+                    }
+                }
+
+                // Update all matching rows in the DOM (both Entities List and Verify Tool tabs)
+                const rows = document.querySelectorAll(`tr[data-entity-id="${entityIdOrName}"], tr[data-entity-name="${entityIdOrName}"]`);
+                rows.forEach(row => {
                     const badge = row.querySelector('.status-badge');
                     const actionCell = row.querySelector('.action-cell');
+
                     if (badge) {
                         badge.className = `status-badge ${statusClass}`;
                         badge.textContent = statusText;
@@ -1700,7 +1718,7 @@
                                    <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                                </button>`;
                     }
-                }
+                });
             });
 
         } else if (msgType === "AgentInformationMessage") {
@@ -2059,18 +2077,16 @@
             const srcTable = srcAgent ? `${srcAgent.table?.schema || ''}.${srcAgent.table?.name || ''}` : '-';
             const tgtTable = tgtAgent ? `${tgtAgent.table?.schema || ''}.${tgtAgent.table?.name || ''}` : '-';
 
-            // Determine mode from entity status and agentEntities type
-            const status = (ent.status || '').toUpperCase();
-            let modeBadge = '<span class="mode-badge mode-none">NOT STARTED</span>';
+            // Determine status badge
+            const status = (ent.status || 'STOPPED').toUpperCase();
+            let statusClass = 'status-stopped';
+            let statusText = 'Pause';
             if (status === 'RUNNING' || status === 'ACTIVE') {
-                // Check if snapshot mode: source type has snapshotWriteMethod or it's a one-time snap
-                const srcType = srcAgent?.entityType?.type || '';
-                modeBadge = '<span class="mode-badge mode-cdc">CDC</span>';
-                if (srcType.toLowerCase().includes('snapshot')) {
-                    modeBadge = '<span class="mode-badge mode-snap">SNAPSHOT</span>';
-                }
-            } else if (status === 'STOPPED' || status === '') {
-                modeBadge = '<span class="mode-badge mode-none">STOPPED</span>';
+                statusClass = 'status-running';
+                statusText = 'Active';
+            } else if (status === 'ERROR') {
+                statusClass = 'status-error';
+                statusText = 'Error';
             }
 
             const tr = document.createElement('tr');
@@ -2078,7 +2094,7 @@
             tr.dataset.entityName = ent.entityName;
             tr.innerHTML = `
                 <td style="text-align: center;"><input type="checkbox" class="verify-entity-checkbox" data-entity="${ent.entityName}" checked onchange="updateSelectAllVerifyHeader()"></td>
-                <td>${modeBadge}</td>
+                <td><span class="status-badge ${statusClass}">${statusText}</span></td>
                 <td><strong>${ent.entityName}</strong></td>
                 <td><span class="mono-text">${srcTable}</span></td>
                 <td class="src-count-cell" data-entity="${ent.entityName}"><span class="val-loading">—</span></td>
