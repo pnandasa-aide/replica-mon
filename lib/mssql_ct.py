@@ -1,26 +1,24 @@
-"""MSSQL Change Tracking reader."""
+"""MSSQL Change Tracking reader (uses direct qadmcli SDK imports)."""
 
 import os
 import json
-import subprocess
 from typing import Optional
 from .journal_cache import JournalCache
 from .sqlite_ct_cache import SQLiteCTCache
 
 
 class MSSQLCTReader:
-    """Read MSSQL Change Tracking data via qadmcli."""
+    """Read MSSQL Change Tracking data via direct qadmcli SDK."""
     
-    def __init__(self, qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh"), use_cache: bool = True, cache_type: str = "sqlite"):
+    def __init__(self, qadmcli_path: Optional[str] = None, use_cache: bool = True, cache_type: str = "sqlite"):
         """
         Initialize MSSQL CT reader.
         
         Args:
-            qadmcli_path: Path to qadmcli.sh
+            qadmcli_path: Path to qadmcli.sh (unused/legacy)
             use_cache: Whether to use CT caching (default: True)
             cache_type: Type of cache to use - "sqlite" (recommended) or "json"
         """
-        self.qadmcli_path = qadmcli_path
         self.use_cache = use_cache
         
         if use_cache:
@@ -35,33 +33,15 @@ class MSSQLCTReader:
                 self.cache = JournalCache()
         else:
             self.cache = None
-    
-    def _run_qadmcli(self, *args) -> dict:
-        """Run qadmcli command and return parsed output."""
-        cmd = [self.qadmcli_path] + list(args)
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            try:
-                # Extract JSON from output (may have shell wrapper messages and INFO logs)
-                import re
-                output = result.stdout
-                
-                # Find JSON object pattern
-                match = re.search(r'\{[^{}]+\}', output, re.DOTALL)
-                if match:
-                    return json.loads(match.group())
-                else:
-                    # Fallback: try parsing entire output
-                    return json.loads(output)
-            except json.JSONDecodeError:
-                return {'output': result.stdout, 'success': True}
-        except subprocess.CalledProcessError as e:
-            return {'error': e.stderr or e.stdout, 'success': False}
+
+    def _get_qadmcli_config(self) -> any:
+        """Load connection config from standard locations or environment."""
+        from qadmcli.config import load_config
+        from pathlib import Path
+        config_path = os.environ.get("QADMCLI_CONFIG") or "/app/qadmcli/config/connection.yaml"
+        if not os.path.exists(config_path):
+            config_path = "../qadmcli/config/connection.yaml"
+        return load_config(Path(config_path))
     
     def get_summary(self, table: str, since: Optional[str] = None, use_time_window: bool = False) -> dict:
         """
@@ -115,31 +95,70 @@ class MSSQLCTReader:
         last_version = 0
         if self.use_cache and self.cache:
             cache_info = self.cache.get_cache_info(f"CT_{table}")
-            last_version = cache_info.get('last_sequence', 0)  # Reuse last_sequence field for CT version
+            last_version = cache_info.get('last_version', 0) or cache_info.get('last_sequence', 0)
         
-        # Build command
-        cmd_args = [
-            "mssql", "ct", "changes",
-            "-t", table_name,
-            "-s", schema,
-            "--format", "json"  # Get individual changes with version numbers!
-        ]
-        
-        # If we have cached data, fetch only new changes
-        # CT supports --since-version for incremental fetch
-        if last_version > 0:
-            cmd_args.extend(["--since-version", str(last_version + 1)])
-            print(f"  ℹ️  Fetching new CT changes since version {last_version}...")
-        elif since:
-            cmd_args.extend(["--since", since])
-            print(f"  ℹ️  Fetching CT changes since {since}...")
-        else:
-            print(f"  ℹ️  Fetching all CT changes (initial load)...")
-        
-        # Execute command
-        result = self._run_qadmcli(*cmd_args)
-        
-        if 'error' in result:
+        from qadmcli.db.mssql import MSSQLConnection
+        from qadmcli.db.mssql_ct import MSSQLChangeTracking
+        from datetime import datetime
+
+        try:
+            config = self._get_qadmcli_config()
+            if not config.mssql:
+                raise ValueError("MSSQL configuration not found in connection.yaml")
+            
+            with MSSQLConnection(config.mssql) as conn:
+                ct_mgr = MSSQLChangeTracking(conn)
+                
+                # Verify CT status first
+                status = ct_mgr.get_table_ct_status(table_name, schema)
+                if not status.is_enabled_on_database:
+                    raise RuntimeError("Change Tracking is not enabled on the database")
+                if not status.is_enabled_on_table:
+                    raise RuntimeError(f"Change Tracking is not enabled on table {schema}.{table_name}")
+
+                # Determine parameters for query
+                since_timestamp = None
+                since_version_param = None
+
+                if last_version > 0:
+                    since_version_param = last_version + 1
+                    print(f"  ℹ️  Fetching new CT changes since version {last_version}...")
+                elif since:
+                    try:
+                        since_timestamp = datetime.strptime(since, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        try:
+                            since_timestamp = datetime.strptime(since, "%Y-%m-%d")
+                        except ValueError:
+                            raise ValueError("Invalid timestamp format. Use YYYY-MM-DD HH:MM:SS or YYYY-MM-DD")
+                    print(f"  ℹ️  Fetching CT changes since {since}...")
+                else:
+                    print(f"  ℹ️  Fetching all CT changes (initial load)...")
+
+                changes_raw = ct_mgr.get_changes(
+                    table_name=table_name,
+                    schema=schema,
+                    since_version=since_version_param,
+                    since_timestamp=since_timestamp
+                )
+
+                # Format changes
+                changes = []
+                for c in changes_raw:
+                    changes.append({
+                        "SYS_CHANGE_VERSION": c.sys_change_version,
+                        "SYS_CHANGE_OPERATION": c.sys_change_operation,
+                        "SYS_CHANGE_COLUMNS": c.sys_change_columns,
+                        "SYS_CHANGE_CONTEXT": c.sys_change_context,
+                        "sys_change_version": c.sys_change_version,
+                        "sys_change_operation": c.sys_change_operation,
+                        "sys_change_columns": c.sys_change_columns,
+                        "sys_change_context": c.sys_change_context,
+                        "sys_change_timestamp": datetime.now().isoformat(),
+                        "PRIMARY_KEY_VALUES": c.primary_key_values,
+                        "primary_key_values": c.primary_key_values
+                    })
+        except Exception as e:
             return {
                 'table': table,
                 'total': 0,
@@ -147,11 +166,8 @@ class MSSQLCTReader:
                 'updates': 0,
                 'deletes': 0,
                 'from_cache': False,
-                'error': result.get('error', 'Unknown error')
+                'error': f"qadmcli SDK failed: {e}"
             }
-        
-        # Parse changes
-        changes = result if isinstance(result, list) else result.get('changes', [])
         
         # Update cache with new changes
         if self.use_cache and self.cache and changes:
@@ -163,7 +179,7 @@ class MSSQLCTReader:
                     new_count = self.cache.store_changes(
                         cache_table_name,
                         changes,
-                        last_version=changes[-1].get('sys_change_version', 0),
+                        last_version=changes[-1].get('SYS_CHANGE_VERSION', 0),
                         last_timestamp=changes[-1].get('sys_change_timestamp')
                     )
                     print(f"  ✓ Cached {new_count} new CT changes (total: {len(changes)})")
@@ -174,7 +190,7 @@ class MSSQLCTReader:
                         cache_table_name,
                         changes,
                         last_timestamp=changes[-1].get('sys_change_timestamp'),
-                        last_sequence=changes[-1].get('sys_change_version', 0)
+                        last_sequence=changes[-1].get('SYS_CHANGE_VERSION', 0)
                     )
                     
                     # Update metadata to mark as full cache
@@ -299,36 +315,62 @@ class MSSQLCTReader:
         
         schema, table_name = parts
         
-        # Call qadmcli to get CT changes in JSON format
-        cmd_args = [
-            "mssql", "ct", "changes",
-            "-t", table_name,
-            "-s", schema,
-            "--format", "json",
-            "--limit", str(limit)
-        ]
-        
-        if since:
-            cmd_args.extend(["--since", since])
-        
-        result = self._run_qadmcli(*cmd_args)
-        
-        if 'error' in result:
+        from qadmcli.db.mssql import MSSQLConnection
+        from qadmcli.db.mssql_ct import MSSQLChangeTracking
+        from datetime import datetime
+
+        try:
+            config = self._get_qadmcli_config()
+            if not config.mssql:
+                raise ValueError("MSSQL configuration not found in connection.yaml")
+            
+            # Parse timestamp if provided
+            since_timestamp = None
+            if since:
+                try:
+                    since_timestamp = datetime.strptime(since, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    try:
+                        since_timestamp = datetime.strptime(since, "%Y-%m-%d")
+                    except ValueError:
+                        raise ValueError("Invalid timestamp format. Use YYYY-MM-DD HH:MM:SS or YYYY-MM-DD")
+
+            with MSSQLConnection(config.mssql) as conn:
+                ct_mgr = MSSQLChangeTracking(conn)
+                changes_raw = ct_mgr.get_changes(
+                    table_name=table_name,
+                    schema=schema,
+                    since_timestamp=since_timestamp
+                )
+                
+                # Format changes
+                changes = []
+                for c in changes_raw:
+                    changes.append({
+                        "SYS_CHANGE_VERSION": c.sys_change_version,
+                        "SYS_CHANGE_OPERATION": c.sys_change_operation,
+                        "SYS_CHANGE_COLUMNS": c.sys_change_columns,
+                        "SYS_CHANGE_CONTEXT": c.sys_change_context,
+                        "PRIMARY_KEY_VALUES": c.primary_key_values,
+                        "PRIMARY_KEY": c.primary_key_values,
+                        "version": c.sys_change_version,
+                        "operation": c.sys_change_operation,
+                        "pk": c.primary_key_values
+                    })
+        except Exception as e:
             return {
                 'total': 0,
                 'inserts': 0,
                 'updates': 0,
                 'deletes': 0,
                 'changes': [],
-                'error': result.get('error', 'Unknown error')
+                'error': f"qadmcli SDK failed: {e}"
             }
         
-        changes = result if isinstance(result, list) else result.get('changes', [])
-        
         # Categorize by operation type
-        inserts = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'I' or c.get('operation') == 'I')
-        updates = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'U' or c.get('operation') == 'U')
-        deletes = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'D' or c.get('operation') == 'D')
+        inserts = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'I')
+        updates = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'U')
+        deletes = sum(1 for c in changes if c.get('SYS_CHANGE_OPERATION') == 'D')
         
         return {
             'total': len(changes),
@@ -356,18 +398,28 @@ class MSSQLCTReader:
         
         schema, table_name = parts
         
-        # Query specific record via qadmcli
-        result = self._run_qadmcli(
-            "mssql", "query",
-            "-q", f"SELECT * FROM [{schema}].[{table_name}] WHERE [{pk_column}] = '{pk_value}'",
-            "--format", "json"
-        )
-        
-        if not result.get('success', True):
+        from qadmcli.db.mssql import MSSQLConnection
+
+        try:
+            config = self._get_qadmcli_config()
+            if not config.mssql:
+                raise ValueError("MSSQL configuration not found in connection.yaml")
+            
+            with MSSQLConnection(config.mssql) as conn:
+                # Query specific record directly via native SQL execute
+                sql = f"SELECT * FROM [{schema}].[{table_name}] WHERE [{pk_column}] = ?"
+                with conn.get_cursor() as cursor:
+                    cursor.execute(sql, (pk_value,))
+                    desc = cursor.description
+                    row = cursor.fetchone()
+                    
+                    if not row or not desc:
+                        return None
+                    
+                    return {desc[i][0]: row[i] for i in range(len(desc))}
+        except Exception as e:
+            print(f"⚠️ get_record SDK failed: {e}")
             return None
-        
-        rows = result.get('rows', [])
-        return rows[0] if rows else None
     
     def is_ct_enabled(self, table: str) -> bool:
         """Check if Change Tracking is enabled for a table."""
@@ -377,14 +429,17 @@ class MSSQLCTReader:
         
         schema, table_name = parts
         
-        result = self._run_qadmcli(
-            "mssql", "ct", "status",
-            "-t", table_name,
-            "-s", schema,
-            "--format", "json"  # Add JSON format
-        )
-        
-        if 'error' in result:
+        from qadmcli.db.mssql import MSSQLConnection
+        from qadmcli.db.mssql_ct import MSSQLChangeTracking
+
+        try:
+            config = self._get_qadmcli_config()
+            if not config.mssql:
+                return False
+            
+            with MSSQLConnection(config.mssql) as conn:
+                ct_mgr = MSSQLChangeTracking(conn)
+                status = ct_mgr.get_table_ct_status(table_name, schema)
+                return bool(status.is_enabled_on_table)
+        except Exception:
             return False
-        
-        return result.get('ct_enabled_on_table', False) or result.get('is_enabled_on_table', False)

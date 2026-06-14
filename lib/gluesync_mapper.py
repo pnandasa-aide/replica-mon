@@ -7,10 +7,12 @@ from typing import Optional
 
 class GlueSyncMapper:
     """Get entity source/target mapping from GlueSync."""
-    
     def __init__(self, gluesync_cli: Optional[str] = None):
         import os
-        self.gluesync_cli = gluesync_cli or os.environ.get("REPLICA_CLI_PATH") or os.environ.get("GLUESYNC_CLI_PATH") or "../replica-cli/gluesync_cli_v2.py"
+        default_cli = "/app/replica-cli/gluesync_cli_v2.py"
+        if not os.path.exists(default_cli):
+            default_cli = "../replica-cli/gluesync_cli_v2.py"
+        self.gluesync_cli = gluesync_cli or os.environ.get("REPLICA_CLI_PATH") or os.environ.get("GLUESYNC_CLI_PATH") or default_cli
     
     def _run_gluesync(self, *args) -> dict:
         """Run gluesync-cli command and return parsed output."""

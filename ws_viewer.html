@@ -118,6 +118,11 @@
             border-color: var(--accent-blue);
         }
 
+        select, option {
+            background-color: #111827 !important;
+            color: #ffffff !important;
+        }
+
         .btn {
             border: none;
             border-radius: 6px;
@@ -320,10 +325,9 @@
                 WebSocket Telemetry Stream Console
             </h1>
         </div>
-        <div>
-            <a href="/" style="color: var(--accent-blue); text-decoration: none; font-size: 0.875rem; font-weight: 500;">
-                ← Back to Dashboard
-            </a>
+        <div style="display: flex; gap: 1rem;">
+            <a href="/monitor" style="color: var(--accent-blue); text-decoration: none; font-size: 0.875rem; font-weight: 500;">📋 Monitor</a>
+            <a href="/tool" style="color: var(--accent-blue); text-decoration: none; font-size: 0.875rem; font-weight: 500;">🔍 Verify Tool</a>
         </div>
     </header>
 
@@ -365,12 +369,21 @@
                     <div class="toolbar-filters">
                         <label for="msgTypeFilter">Filter Msg:</label>
                         <select id="msgTypeFilter" onchange="applyFilters()" style="padding: 0.4rem; font-size: 0.8rem;">
-                            <option value="all">All Messages</option>
-                            <option value="EntityStatusMessage">Status Updates Only</option>
-                            <option value="MetricsMessage">Metrics Breakdown Only</option>
+                            <option value="all">All Message Types</option>
+                            <option value="EntityStatusMessage">Entity Status Updates</option>
+                            <option value="MetricsMessage">Metrics Breakdown (Ops)</option>
+                            <option value="AgentHealthMessage">Agent Health Updates</option>
+                            <option value="PipelineStatusMessage">Pipeline Status Logs</option>
+                            <option value="LicenseStatusMessage">License Status Info</option>
+                            <option value="NotificationMessage">Notification Messages</option>
                         </select>
 
-                        <input type="text" id="logSearch" class="search-input" placeholder="Search keywords..." oninput="applyFilters()">
+                        <label for="pipelineFilter" style="margin-left: 0.5rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-secondary);">Pipeline:</label>
+                        <select id="pipelineFilter" onchange="applyFilters()" style="padding: 0.4rem; font-size: 0.8rem; background-color: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-primary); outline: none;">
+                            <option value="all">All Pipelines</option>
+                        </select>
+
+                        <input type="text" id="logSearch" class="search-input" placeholder="Search keywords..." oninput="applyFilters()" style="margin-left: 0.5rem;">
                     </div>
                     <div style="display: flex; gap: 0.5rem;">
                         <button class="btn-small" onclick="togglePause()" id="btnPause">Pause Output</button>
@@ -378,9 +391,31 @@
                     </div>
                 </div>
 
-                <div class="terminal-log" id="terminalLog">
-                    <div style="color: var(--text-secondary); text-align: center; margin-top: 5rem;">
-                        Configure pipeline / entities on the left, then click <strong>Start Live Telemetry</strong> to monitor raw WS frames.
+                <div style="display: flex; flex: 1; overflow: hidden; min-height: 0; position: relative;">
+                    <!-- Left: Log Console -->
+                    <div class="terminal-log" id="terminalLog" style="flex: 1; overflow-y: auto; height: 100%;">
+                        <div style="color: var(--text-secondary); text-align: center; margin-top: 5rem;">
+                            Configure pipeline / entities on the left, then click <strong>Start Live Telemetry</strong> to monitor raw WS frames.
+                        </div>
+                    </div>
+                    
+                    <!-- Right: Pipeline & Entity Status Hierarchy -->
+                    <div id="hierarchyContainer" style="width: 380px; border-left: 1px solid var(--border-color); background-color: var(--bg-secondary); overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                        <!-- Connection Status Card -->
+                        <div id="connectionStatusCard" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem; display: flex; align-items: center; justify-content: space-between;">
+                            <span style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--text-secondary);">WSS Stream Status:</span>
+                            <span id="connectionStateBadge" style="font-size: 0.75rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 4px; background: rgba(156,163,175,0.1); color: #9ca3af;">DISCONNECTED</span>
+                        </div>
+
+                        <h3 style="margin: 0; font-size: 0.9rem; font-weight: 700; color: var(--accent-blue); display: flex; align-items: center; justify-content: space-between; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                            <span>Pipeline Status</span>
+                            <span style="font-size: 0.7rem; font-weight: normal; color: var(--text-secondary); text-transform: none; font-family: monospace;" id="hierarchy-update-time">No updates</span>
+                        </h3>
+                        <div id="hierarchyTree" style="display: flex; flex-direction: column; gap: 1rem;">
+                            <div style="color: var(--text-secondary); font-size: 0.85rem; text-align: center; padding-top: 2rem; font-style: italic;">
+                                Waiting for status feed...
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -451,6 +486,8 @@
         let isPaused = false;
         let pipelines = [];
         let entitiesList = [];
+        let activePipelineId = "";
+        let pipelineStatusState = {};
 
         // Load active pipelines
         async function init() {
@@ -473,6 +510,17 @@
                     opt.textContent = p.name || p.pipelineId;
                     select.appendChild(opt);
                 });
+
+                const pFilter = document.getElementById('pipelineFilter');
+                if (pFilter) {
+                    pFilter.innerHTML = '<option value="all">All Pipelines</option>';
+                    pipelines.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p.pipelineId;
+                        opt.textContent = p.name || p.pipelineId;
+                        pFilter.appendChild(opt);
+                    });
+                }
 
                 handlePipelineChange(pipelines[0].pipelineId);
             } catch (err) {
@@ -522,6 +570,7 @@
 
         function startStream() {
             const pipelineId = document.getElementById('pipelineSelect').value;
+            activePipelineId = pipelineId;
             const entitiesInput = document.getElementById('entityFilter').value;
             
             if (!pipelineId) {
@@ -542,6 +591,26 @@
             document.getElementById('btnConnect').style.display = 'none';
             document.getElementById('btnDisconnect').style.display = 'block';
             
+            const badge = document.getElementById('connectionStateBadge');
+            if (badge) {
+                badge.textContent = 'CONNECTING';
+                badge.style.backgroundColor = 'rgba(59, 130, 246, 0.15)';
+                badge.style.color = '#93c5fd';
+            }
+            
+            pipelineStatusState = {};
+            if (pipelineId && entitiesList && entitiesList.length > 0) {
+                pipelineStatusState[pipelineId] = { name: getPipelineName(pipelineId), entities: {} };
+                entitiesList.forEach(e => {
+                    pipelineStatusState[pipelineId].entities[e.entityName] = {
+                        id: e.entityId,
+                        status: e.status || 'UNKNOWN',
+                        isCache: true
+                    };
+                });
+            }
+            renderHierarchy();
+            
             const logContainer = document.getElementById('terminalLog');
             logContainer.innerHTML = `<div style="color: var(--accent);">[SYSTEM] Connecting to backend WebSocket stream...</div>`;
 
@@ -550,6 +619,12 @@
 
             ws.onopen = () => {
                 document.getElementById('pulse').className = 'pulse-indicator connected';
+                const openBadge = document.getElementById('connectionStateBadge');
+                if (openBadge) {
+                    openBadge.textContent = 'CONNECTED';
+                    openBadge.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+                    openBadge.style.color = '#34d399';
+                }
                 appendSystemLog('WebSocket connection opened successfully. Subscribed to live telemetry feed.');
             };
 
@@ -565,11 +640,23 @@
 
             ws.onclose = (event) => {
                 document.getElementById('pulse').className = 'pulse-indicator';
+                const closeBadge = document.getElementById('connectionStateBadge');
+                if (closeBadge) {
+                    closeBadge.textContent = 'DISCONNECTED';
+                    closeBadge.style.backgroundColor = 'rgba(156, 163, 175, 0.1)';
+                    closeBadge.style.color = '#9ca3af';
+                }
                 appendSystemLog(`WebSocket connection closed: ${event.reason || 'No reason specified'} (${event.code})`);
                 stopStream();
             };
 
             ws.onerror = (err) => {
+                const errBadge = document.getElementById('connectionStateBadge');
+                if (errBadge) {
+                    errBadge.textContent = 'ERROR';
+                    errBadge.style.backgroundColor = 'rgba(239, 68, 68, 0.15)';
+                    errBadge.style.color = '#f87171';
+                }
                 appendSystemLog(`WebSocket error detected: ${err.message || 'Check browser developer console'}`, 'error');
             };
         }
@@ -582,6 +669,13 @@
             document.getElementById('btnConnect').style.display = 'block';
             document.getElementById('btnDisconnect').style.display = 'none';
             document.getElementById('pulse').className = 'pulse-indicator';
+            
+            const badge = document.getElementById('connectionStateBadge');
+            if (badge) {
+                badge.textContent = 'DISCONNECTED';
+                badge.style.backgroundColor = 'rgba(156, 163, 175, 0.1)';
+                badge.style.color = '#9ca3af';
+            }
         }
 
         function appendSystemLog(msg, type = 'info') {
@@ -589,6 +683,7 @@
             const logContainer = document.getElementById('terminalLog');
             const div = document.createElement('div');
             div.className = 'log-item';
+            div.dataset.pipelineId = activePipelineId || 'system';
             div.style.borderLeftColor = type === 'error' ? 'var(--status-err)' : 'var(--text-secondary)';
             
             const time = new Date().toLocaleTimeString();
@@ -603,6 +698,167 @@
             scrollToBottom();
         }
 
+        function getPipelineName(pid) {
+            const p = pipelines.find(x => x.pipelineId === pid);
+            return p ? (p.name || pid) : pid;
+        }
+
+        function renderHierarchy() {
+            const container = document.getElementById('hierarchyTree');
+            const updateTimeEl = document.getElementById('hierarchy-update-time');
+            updateTimeEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+
+            if (Object.keys(pipelineStatusState).length === 0) {
+                container.innerHTML = `
+                    <div style="color: var(--text-secondary); font-size: 0.85rem; text-align: center; padding-top: 2rem; font-style: italic;">
+                        Waiting for status feed...
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = '';
+
+            for (const pid in pipelineStatusState) {
+                const pipeline = pipelineStatusState[pid];
+                
+                const pipelineEl = document.createElement('div');
+                pipelineEl.style.cssText = `
+                    background: rgba(255, 255, 255, 0.02);
+                    border: 1px solid var(--border-color);
+                    border-radius: 8px;
+                    padding: 1rem;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 0.75rem;
+                `;
+
+                // Pipeline Header
+                const header = document.createElement('div');
+                header.style.cssText = `
+                    font-size: 0.85rem;
+                    font-weight: 700;
+                    color: var(--text-primary);
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                    padding-bottom: 0.5rem;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                `;
+                header.innerHTML = `
+                    <span>Pipeline: ${pipeline.name}</span>
+                    <span style="font-size: 0.7rem; color: var(--text-secondary); font-family: monospace;">[${pid}]</span>
+                `;
+                pipelineEl.appendChild(header);
+
+                // Entities List
+                const entitiesContainer = document.createElement('div');
+                entitiesContainer.style.cssText = `
+                    display: flex;
+                    flex-direction: column;
+                    gap: 0.5rem;
+                `;
+
+                const entityNames = Object.keys(pipeline.entities);
+                if (entityNames.length === 0) {
+                    entitiesContainer.innerHTML = `<div style="font-size: 0.75rem; color: var(--text-secondary); font-style: italic;">No entities synced yet</div>`;
+                } else {
+                    entityNames.forEach(ename => {
+                        const ent = pipeline.entities[ename];
+                        
+                        const entRow = document.createElement('div');
+                        entRow.style.cssText = `
+                            background: rgba(0, 0, 0, 0.2);
+                            border-radius: 6px;
+                            padding: 0.6rem;
+                            display: flex;
+                            flex-direction: column;
+                            gap: 0.4rem;
+                        `;
+
+                        // Entity Header
+                        const entHeader = document.createElement('div');
+                        entHeader.style.cssText = `
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: center;
+                            gap: 0.5rem;
+                        `;
+
+                        let statusColor = '#9ca3af'; // gray
+                        let statusBg = 'rgba(156, 163, 175, 0.1)';
+                        let statusText = ent.status || 'UNKNOWN';
+
+                        if (statusText === 'RUNNING') {
+                            statusColor = '#10b981'; // green
+                            statusBg = 'rgba(16, 185, 129, 0.15)';
+                        } else if (statusText === 'MIGRATING') {
+                            statusColor = '#8b5cf6'; // purple
+                            statusBg = 'rgba(139, 92, 246, 0.15)';
+                        } else if (statusText === 'PAUSED' || statusText === 'BUSY') {
+                            statusColor = '#f59e0b'; // orange
+                            statusBg = 'rgba(245, 158, 11, 0.15)';
+                        } else if (statusText === 'ERROR') {
+                            statusColor = '#ef4444'; // red
+                            statusBg = 'rgba(239, 68, 68, 0.15)';
+                        }
+
+                        const statusBadge = `
+                            <span style="
+                                font-size: 0.65rem;
+                                font-weight: 700;
+                                padding: 0.15rem 0.4rem;
+                                border-radius: 4px;
+                                color: ${statusColor};
+                                background-color: ${statusBg};
+                                display: inline-flex;
+                                align-items: center;
+                                gap: 0.25rem;
+                            ">
+                                ${statusText === 'RUNNING' || statusText === 'MIGRATING' ? '<span class="pulse-indicator connected" style="width: 6px; height: 6px; margin: 0; background-color: ' + statusColor + '; box-shadow: 0 0 6px ' + statusColor + ';"></span>' : ''}
+                                ${statusText}${ent.isCache ? ' (cache)' : ''}
+                            </span>
+                        `;
+
+                        entHeader.innerHTML = `
+                            <div style="display: flex; flex-direction: column;">
+                                <span style="font-size: 0.8rem; font-weight: 600; color: #e5e7eb;">${ename}</span>
+                                <span style="font-size: 0.65rem; color: var(--text-secondary); font-family: monospace;">ID: ${ent.id || 'N/A'}</span>
+                            </div>
+                            ${statusBadge}
+                        `;
+                        entRow.appendChild(entHeader);
+
+                        // Metrics Section
+                        if (ent.totalOps !== undefined) {
+                            const metricsRow = document.createElement('div');
+                            metricsRow.style.cssText = `
+                                font-size: 0.65rem;
+                                color: var(--text-secondary);
+                                display: grid;
+                                grid-template-columns: repeat(4, 1fr);
+                                gap: 0.25rem;
+                                border-top: 1px solid rgba(255, 255, 255, 0.03);
+                                padding-top: 0.4rem;
+                                margin-top: 0.2rem;
+                            `;
+                            metricsRow.innerHTML = `
+                                <span>Ins: <strong>${ent.inserts}</strong></span>
+                                <span>Upd: <strong>${ent.updates}</strong></span>
+                                <span>Del: <strong>${ent.deletes}</strong></span>
+                                <span>Tot: <strong>${ent.totalOps}</strong></span>
+                            `;
+                            entRow.appendChild(metricsRow);
+                        }
+
+                        entitiesContainer.appendChild(entRow);
+                    });
+                }
+                
+                pipelineEl.appendChild(entitiesContainer);
+                container.appendChild(pipelineEl);
+            }
+        }
+
         function appendTelemetryLog(data) {
             const logContainer = document.getElementById('terminalLog');
             const div = document.createElement('div');
@@ -612,11 +868,129 @@
             
             div.className = 'log-item';
             div.dataset.msgType = msgType;
+            div.dataset.pipelineId = activePipelineId || 'unknown';
             
             if (msgType === 'EntityStatusMessage') {
                 div.classList.add('status-msg');
+                
+                const inner = data.Field_2_message?.Field_1_message;
+                if (inner) {
+                    let items = inner.Field_1_message_list;
+                    if (!items) {
+                        const single = inner.Field_1_message;
+                        items = single ? [single] : [];
+                    }
+                    items.forEach(item => {
+                        if (!item) return;
+                        const pid = item.Field_1_string || activePipelineId;
+                        const enriched = item._enriched || {};
+                        const entityId = item.Field_2_string || enriched.entity_id;
+                        
+                        let entityName = enriched.entity_name;
+                        if (!entityName && entitiesList) {
+                            const found = entitiesList.find(e => e.entityId === entityId);
+                            if (found) {
+                                entityName = found.entityName;
+                            }
+                        }
+                        if (!entityName) {
+                            entityName = entityId;
+                        }
+
+                        let statusText = enriched.status_text;
+                        if (!statusText) {
+                            if (item.Field_3_varint) {
+                                statusText = 'MIGRATING';
+                            } else if (item.Field_4_varint) {
+                                statusText = 'RUNNING';
+                            } else if (item.Field_5_varint) {
+                                statusText = 'BUSY';
+                            } else {
+                                statusText = 'STOPPED';
+                            }
+                        }
+
+                        if (!pipelineStatusState[pid]) {
+                            pipelineStatusState[pid] = { name: getPipelineName(pid), entities: {} };
+                        }
+
+                        let entState = null;
+                        if (pipelineStatusState[pid].entities[entityName]) {
+                            entState = pipelineStatusState[pid].entities[entityName];
+                        } else {
+                            for (const name in pipelineStatusState[pid].entities) {
+                                if (pipelineStatusState[pid].entities[name].id === entityId) {
+                                    entState = pipelineStatusState[pid].entities[name];
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!entState) {
+                            pipelineStatusState[pid].entities[entityName] = { id: entityId };
+                            entState = pipelineStatusState[pid].entities[entityName];
+                        }
+
+                        entState.status = statusText;
+                        entState.isCache = false;
+                        entState.lastUpdate = new Date().toLocaleTimeString();
+                    });
+                    renderHierarchy();
+                }
             } else if (msgType === 'MetricsMessage') {
                 div.classList.add('metrics-msg');
+
+                const inner = data.Field_2_message?.Field_1_message?.Field_1_message?.Field_2_message;
+                if (inner) {
+                    const enriched = inner._enriched || {};
+                    const entityId = enriched.entity_id || inner.Field_1_string;
+                    let entityName = enriched.entity_name;
+                    if (!entityName && entitiesList) {
+                        const found = entitiesList.find(e => e.entityId === entityId);
+                        if (found) {
+                            entityName = found.entityName;
+                        }
+                    }
+                    if (!entityName) {
+                        entityName = entityId;
+                    }
+                    const pid = activePipelineId;
+
+                    const inserts = inner.Field_4_varint || 0;
+                    const updates = inner.Field_5_varint || 0;
+                    const deletes = inner.Field_6_varint || 0;
+                    const totalOps = inner.Field_7_varint || 0;
+
+                    if (!pipelineStatusState[pid]) {
+                        pipelineStatusState[pid] = { name: getPipelineName(pid), entities: {} };
+                    }
+
+                    let entState = null;
+                    if (pipelineStatusState[pid].entities[entityName]) {
+                        entState = pipelineStatusState[pid].entities[entityName];
+                    } else {
+                        for (const name in pipelineStatusState[pid].entities) {
+                            if (pipelineStatusState[pid].entities[name].id === entityId) {
+                                entState = pipelineStatusState[pid].entities[name];
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!entState) {
+                        pipelineStatusState[pid].entities[entityName] = { id: entityId };
+                        entState = pipelineStatusState[pid].entities[entityName];
+                    }
+
+                    entState.inserts = inserts;
+                    entState.updates = updates;
+                    entState.deletes = deletes;
+                    entState.totalOps = totalOps;
+                    entState.status = 'RUNNING';
+                    entState.isCache = false;
+                    entState.lastUpdate = new Date().toLocaleTimeString();
+                    renderHierarchy();
+                }
             }
 
             const highlightedJson = syntaxHighlightJson(data);
@@ -653,18 +1027,22 @@
 
         function clearLogs() {
             document.getElementById('terminalLog').innerHTML = '';
+            pipelineStatusState = {};
+            renderHierarchy();
         }
 
         function applyFilters() {
             const filterType = document.getElementById('msgTypeFilter').value;
+            const filterPipeline = document.getElementById('pipelineFilter').value;
             const searchVal = document.getElementById('logSearch').value.toLowerCase();
             const logItems = document.querySelectorAll('.log-item');
 
             logItems.forEach(item => {
                 const typeMatches = filterType === 'all' || item.dataset.msgType === filterType;
+                const pipelineMatches = filterPipeline === 'all' || item.dataset.pipelineId === filterPipeline || item.dataset.pipelineId === 'system';
                 const textMatches = !searchVal || item.textContent.toLowerCase().includes(searchVal);
 
-                if (typeMatches && textMatches) {
+                if (typeMatches && pipelineMatches && textMatches) {
                     item.style.display = 'block';
                 } else {
                     item.style.display = 'none';

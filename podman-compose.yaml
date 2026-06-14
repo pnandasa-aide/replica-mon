@@ -26,7 +26,8 @@ services:
       # Saved static HTML reports
       - ./compare/reports:/app/replica-mon/compare/reports:Z
       # Static HTML files (live editing without rebuild)
-      - ./dashboard_mockup.html:/app/replica-mon/dashboard_mockup.html:Z
+      - ./monitor.html:/app/replica-mon/monitor.html:Z
+      - ./verify_tool.html:/app/replica-mon/verify_tool.html:Z
       - ./ws_viewer.html:/app/replica-mon/ws_viewer.html:Z
       # Backend Python files (live editing without rebuild)
       - ./backend:/app/replica-mon/backend:Z

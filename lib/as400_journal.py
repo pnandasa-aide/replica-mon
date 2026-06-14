@@ -1,9 +1,7 @@
-"""AS400 journal reader (wraps qadmcli container)."""
+"""AS400 journal reader (uses direct qadmcli SDK imports)."""
 
 import os
 import json
-import subprocess
-import re
 from typing import Optional
 from .journal_cache import JournalCache
 from .sqlite_journal_cache import SQLiteJournalCache
@@ -12,17 +10,14 @@ from .sqlite_journal_cache import SQLiteJournalCache
 class AS400JournalReader:
     """Read AS400 journal entries via qadmcli with caching support."""
     
-    def __init__(self, qadmcli_path: str = os.environ.get("QADMCLI_PATH", "../qadmcli/qadmcli.sh"), 
-                 use_cache: bool = True, cache_type: str = "sqlite"):
+    def __init__(self, use_cache: bool = True, cache_type: str = "sqlite"):
         """
         Initialize AS400 journal reader.
         
         Args:
-            qadmcli_path: Path to qadmcli.sh
             use_cache: Whether to use journal caching (default: True)
             cache_type: Type of cache to use - "sqlite" (recommended) or "json"
         """
-        self.qadmcli_path = qadmcli_path
         self.use_cache = use_cache
         
         if use_cache:
@@ -37,72 +32,15 @@ class AS400JournalReader:
                 self.cache = JournalCache()
         else:
             self.cache = None
-    
-    def _run_qadmcli(self, *args) -> dict:
-        """Run qadmcli command and return parsed output."""
-        cmd = [self.qadmcli_path] + list(args)
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=120  # 2 minute timeout
-            )
-            # Try to parse as JSON if possible
-            try:
-                # Extract JSON from output (may have wrapper messages and trailing logs)
-                output = result.stdout
-                
-                # Strip ANSI escape codes from entire output first
-                ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
-                clean_output = ansi_escape.sub('', output)
-                
-                # Find JSON - handle both objects {} and arrays []
-                # Look for first { or [
-                start_idx_obj = clean_output.find('{')
-                start_idx_arr = clean_output.find('[')
-                
-                if start_idx_obj >= 0 or start_idx_arr >= 0:
-                    # Use whichever comes first
-                    if start_idx_obj >= 0 and (start_idx_arr < 0 or start_idx_obj < start_idx_arr):
-                        start_idx = start_idx_obj
-                        open_char = '{'
-                        close_char = '}'
-                    else:
-                        start_idx = start_idx_arr
-                        open_char = '['
-                        close_char = ']'
-                    
-                    # Find the matching closing bracket/brace
-                    bracket_count = 0
-                    end_idx = start_idx
-                    for i in range(start_idx, len(clean_output)):
-                        if clean_output[i] == open_char:
-                            bracket_count += 1
-                        elif clean_output[i] == close_char:
-                            bracket_count -= 1
-                            if bracket_count == 0:
-                                end_idx = i + 1
-                                break
-                    
-                    json_str = clean_output[start_idx:end_idx]
-                    try:
-                        return json.loads(json_str)
-                    except json.JSONDecodeError as e:
-                        # JSON extraction failed, log and fallback
-                        print(f"  ⚠️  JSON parse error: {e}")
-                        print(f"  ℹ️  Extracted (first 200 chars): {json_str[:200]}")
-                
-                # Fallback: try parsing entire output
-                return json.loads(clean_output)
-            except json.JSONDecodeError:
-                # Complete failure - return raw output for debugging
-                return {'output': result.stdout, 'success': True}
-        except subprocess.TimeoutExpired:
-            return {'error': 'Command timed out after 120 seconds', 'success': False}
-        except subprocess.CalledProcessError as e:
-            return {'error': e.stderr or e.stdout, 'success': False}
+
+    def _get_qadmcli_config(self) -> any:
+        """Load connection config from standard locations or environment."""
+        from qadmcli.config import load_config
+        from pathlib import Path
+        config_path = os.environ.get("QADMCLI_CONFIG") or "/app/qadmcli/config/connection.yaml"
+        if not os.path.exists(config_path):
+            config_path = "../qadmcli/config/connection.yaml"
+        return load_config(Path(config_path))
     
     def get_summary(self, table: str, since: Optional[str] = None, use_time_window: bool = False) -> dict:
         """
@@ -146,6 +84,9 @@ class AS400JournalReader:
         Returns:
             Summary dictionary with counts
         """
+        from qadmcli.db.connection import AS400ConnectionManager
+        from qadmcli.db.journal import JournalManager
+
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format LIBRARY.TABLE, got: {table}")
@@ -160,29 +101,30 @@ class AS400JournalReader:
             last_sequence = cache_info.get('last_sequence', 0)
             last_timestamp = cache_info.get('last_timestamp')
         
-        # Build command
-        cmd_args = [
-            "journal", "entries",
-            "-t", table_name,
-            "-l", library,
-            "--format", "json"  # Get individual entries with timestamps!
-        ]
-        
-        # If we have cached data, fetch only new entries since last timestamp
-        # Note: qadmcli doesn't support --from-sequence, so we use --from-time
+        # Determine from-time parameter
+        from_time = None
         if last_timestamp:
-            cmd_args.extend(["--from-time", last_timestamp])
+            from_time = last_timestamp
             print(f"  ℹ️  Fetching new journal entries since {last_timestamp}...")
         elif since:
-            cmd_args.extend(["--from-time", since])
+            from_time = since
             print(f"  ℹ️  Fetching journal entries since {since}...")
         else:
-            print(f"  ℹ️  Fetching all journal entries (initial load, this may take a while)...")
+            print(f"  ℹ️  Fetching all journal entries (initial load)...")
         
-        # Execute command
-        result = self._run_qadmcli(*cmd_args)
-        
-        if 'error' in result:
+        try:
+            config = self._get_qadmcli_config()
+            with AS400ConnectionManager(config) as conn:
+                jrn_mgr = JournalManager(conn)
+                # Fetch entries directly from database using SDK library logic
+                entries_raw = jrn_mgr.get_journal_entries(
+                    table_name=table_name,
+                    library=library,
+                    from_time=from_time,
+                    limit=100000
+                )
+                entries = [e.model_dump() for e in entries_raw]
+        except Exception as e:
             return {
                 'table': table,
                 'total': 0,
@@ -190,11 +132,8 @@ class AS400JournalReader:
                 'updates': 0,
                 'deletes': 0,
                 'from_cache': False,
-                'error': result.get('error', 'Unknown error')
+                'error': f"qadmcli SDK failed: {e}"
             }
-        
-        # Parse entries
-        entries = result if isinstance(result, list) else result.get('entries', [])
         
         # Update cache with new entries
         if self.use_cache and self.cache and entries:
@@ -230,8 +169,6 @@ class AS400JournalReader:
                 print(f"  ✓ Cached {new_count} new entries (total: {len(entries)})")
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not update cache: {e}")
-                import traceback
-                traceback.print_exc()
         
         # Aggregate counts
         summary = self._count_by_type(entries)
@@ -333,42 +270,46 @@ class AS400JournalReader:
         Returns:
             Dict with 'total', 'inserts', 'updates', 'deletes', 'entries'
         """
+        from qadmcli.db.connection import AS400ConnectionManager
+        from qadmcli.db.journal import JournalManager
+
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format LIBRARY.TABLE, got: {table}")
         
         library, table_name = parts
         
-        # Call qadmcli to get journal entries
-        cmd_args = [
-            "journal", "entries",
-            "-t", table_name,
-            "-l", library,
-            "--format", "json",
-            "--limit", str(limit)
-        ]
+        try:
+            config = self._get_qadmcli_config()
+            with AS400ConnectionManager(config) as conn:
+                jrn_mgr = JournalManager(conn)
+                entries_raw = jrn_mgr.get_journal_entries(
+                    table_name=table_name,
+                    library=library,
+                    from_time=since,
+                    limit=limit
+                )
+                entries = [e.model_dump() for e in entries_raw]
+        except Exception as e:
+            raise RuntimeError(f"qadmcli SDK failed: {e}")
         
-        if since:
-            cmd_args.extend(["--from-time", since])
+        inserts = sum(1 for e in entries if e.get('entry_type') == 'PT')
+        updates = sum(1 for e in entries if e.get('entry_type') in ('UP', 'UB'))
+        deletes = sum(1 for e in entries if e.get('entry_type') == 'DL')
         
-        result = self._run_qadmcli(*cmd_args)
-        
-        if 'error' in result:
-            raise RuntimeError(f"qadmcli failed: {result.get('error')}")
-        
-        # Parse and categorize entries
-        entries = result if isinstance(result, list) else result.get('entries', [])
-        
-        inserts = sum(1 for e in entries if e.get('code') == 'PT')
-        updates = sum(1 for e in entries if e.get('code') == 'UP')
-        deletes = sum(1 for e in entries if e.get('code') == 'DL')
+        # Standardize entry key format (e.g. entry_type maps to code)
+        formatted_entries = []
+        for e in entries:
+            fe = dict(e)
+            fe.setdefault('code', e.get('entry_type', ''))
+            formatted_entries.append(fe)
         
         return {
             'total': len(entries),
             'inserts': inserts,
             'updates': updates,
             'deletes': deletes,
-            'entries': entries[:limit]
+            'entries': formatted_entries[:limit]
         }
     
     def get_record(self, table: str, pk_column: str, pk_value: str) -> Optional[dict]:
@@ -383,21 +324,30 @@ class AS400JournalReader:
         Returns:
             Record dict or None if not found
         """
+        from qadmcli.db.connection import AS400ConnectionManager
+
         parts = table.split('.')
         if len(parts) != 2:
             raise ValueError(f"Table must be in format LIBRARY.TABLE, got: {table}")
         
         library, table_name = parts
         
-        # Query specific record via qadmcli
-        result = self._run_qadmcli(
-            "sql", "execute",
-            "-q", f"SELECT * FROM {library}.{table_name} WHERE {pk_column} = '{pk_value}'",
-            "--format", "json"
-        )
-        
-        if not result.get('success', True):
+        try:
+            config = self._get_qadmcli_config()
+            with AS400ConnectionManager(config) as conn:
+                # Query specific record directly via native SQL execute
+                sql = f"SELECT * FROM {library}.{table_name} WHERE {pk_column} = ?"
+                cursor = conn.execute(sql, (pk_value,))
+                
+                # Fetch row descriptions to build dictionary
+                desc = cursor.description
+                row = cursor.fetchone()
+                cursor.close()
+                
+                if not row or not desc:
+                    return None
+                
+                return {desc[i][0]: row[i] for i in range(len(desc))}
+        except Exception as e:
+            print(f"⚠️ get_record SDK failed: {e}")
             return None
-        
-        rows = result.get('rows', [])
-        return rows[0] if rows else None

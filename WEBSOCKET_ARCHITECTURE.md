@@ -1,141 +1,93 @@
-# GlueSync WebSocket Architecture & Findings
+# GlueSync WebSocket Architecture & Decoder Details
 
-## Overview
-This document outlines the findings from our investigation into the GlueSync WebSocket monitoring stream. The objective was to intercept, subscribe to, and decode the live telemetry data to power real-time UI updates for `replica-mon`.
+This document details the telemetry monitoring stream in `replica-mon`, explaining how live metrics and status updates are intercepted, decoded, and relayed to the web dashboard.
 
 ---
 
-## 1. Establishing the Connection (The Subscription)
+## 1. The Relay Architecture (How it Connects)
 
-The GlueSync CoreHub WebSocket runs over a secure `wss://` protocol at `/ui`. To start receiving live updates for specific entities, the client must first send a subscription request via the REST API.
+To bypass browser-level restriction issues and avoid loading raw binary parsing onto the frontend, `replica-mon` uses a **Backend Relay Pattern**:
 
-**Endpoint:** `PUT /ui/entities-metrics-subscription`
-**Authentication:** Requires a standard Bearer Token.
-**Required Payload:** The backend strictly requires a `EntitiesMetricsSubscriptionDto` JSON structure consisting of the Pipeline ID and an array of Entity Names.
+```mermaid
+sequenceDiagram
+    participant WebClient as Web Dashboard (ws_viewer.html)
+    participant Backend as Python Backend (main.py)
+    participant GlueSync as GlueSync CoreHub (wss:///ui)
 
-```json
-{
-  "pipelineId": "f590ab8c",
-  "entities": [
-    "GSLIBTST.CUSTOMERS"
-  ]
-}
+    WebClient->>Backend: 1. Connects to ws://<host>/ws/metrics?pipeline_id=...&entities=...
+    Backend->>GlueSync: 2. Opens WSS connection to wss://<gluesync>/ui
+    Backend->>GlueSync: 3. PUT /ui/entities-metrics-subscription (Subscribes to pipeline & entities)
+    loop Live Telemetry Flow
+        GlueSync->>Backend: 4. Sends Message (Binary Protobuf OR JSON)
+        Note over Backend: Decodes binary (if raw) OR<br/>Extracts JSON attributes
+        Note over Backend: Enriches with metadata (names, tables)
+        Backend->>WebClient: 5. Relays Enriched JSON representation
+    end
 ```
 
-*Note: Without this exact payload, the backend will return a `500 HttpMessageNotReadableException`.*
+### Flow Details:
+1. **Frontend Request**: The Web Dashboard (`ws_viewer.html`) connects to the Python backend via:
+   ```javascript
+   const socketUrl = `ws://localhost:8081/ws/metrics?pipeline_id=${pipelineId}&entities=${entities}`;
+   const ws = new WebSocket(socketUrl);
+   ```
+2. **Backend Subscription**: Upon receiving a connection, the FastAPI backend retrieves the user's active Bearer Token, initiates a Python `GlueSyncWebSocketClient`, and issues a `PUT /ui/entities-metrics-subscription` to register the pipeline and target entities.
+3. **Continuous Streaming**: The backend reads messages from GlueSync, processes/decodes them, and pushes them instantly to the active browser frontend.
 
 ---
 
-## 2. Message Format: Protocol Buffers (Protobuf)
+## 2. Message Formats & Decoding
 
-Unlike typical web applications that stream JSON, GlueSync transmits live statistics using **deeply nested Protocol Buffers (Protobuf)**. 
+GlueSync streams telemetry data in two formats depending on the version and configuration. The backend client handles both natively:
 
-### Why Protobuf?
-- **Speed & Size:** It is a highly optimized binary format that strips out JSON keys. Strings are sent as plain text, but all numbers (like "rows processed", "latency", and "status codes") are compressed into binary chunks called "varints" (Variable-Length Integers).
-- **Impact on Parsing:** Because the keys are missing (replaced by Field IDs like `Field 1`, `Field 2`), parsing the binary stream directly in a raw Python script results in a `UnicodeDecodeError`.
+### A. Modern JSON Messages (GlueSync 2.2.8+)
+In newer versions, GlueSync can transmit structured telemetry messages as JSON. The backend detects if the incoming payload is a JSON dictionary containing `"type"` and `"content"` keys, extracting the following message types:
 
-### Observed Message Types
-By performing a raw hex-dump of the stream, we identified several message types:
-1. `LicenseStatusMessage`: Contains license validity info (e.g., "trial until 2026-05-28").
-2. `ConnectedExternalModulesMessaged`: Configuration mapping for external integrations (e.g., Grafana dashboards).
-3. `NotificationMessage`: Push notifications for the UI.
-4. `EntityStatusMessage`: Specific health and activity updates for a tracked entity.
-5. `PipelineStatusMessage`: The main 600+ byte payload containing deeply nested Source Agent, Target Agent, and database configurations.
+1. **`MetricsMessage`**: Contains real-time counters.
+   * *Extracted Fields*: `inserts`, `updates`, `deletes`, `totalOps`.
+   * *Relayed Output*: Standardized into normalized metrics and saved to the SQLite metrics store (`ws_metrics` table).
+2. **`EntityStatusMessage`**: Contains active sync flags.
+   * *Extracted Fields*: `isMigrationActive`, `isSyncActive`, `isBusy`.
+   * *State Mapping*:
+     * `isMigrationActive` = 1 → `MIGRATING` (Snapshot phase)
+     * `isSyncActive` = 1 → `RUNNING` (CDC phase)
+     * `isBusy` = 1 → `PAUSED`
+     * Otherwise → `STOPPED`
+3. **`PipelineStatusMessage`**: Discovered agent health mapping.
+   * *Extracted Fields*: Normalizes agent connections (`connectionStatus`, `status`, `connectedDatabaseHost`, `connectionError`) into `AgentHealthMessage` relayed to the client and stored in the database.
 
----
+### B. Protobuf Binary Messages (Fallback)
+If the message is received as raw binary bytes (or older Protobuf frames), the backend invokes a custom, zero-dependency recursive decoder:
 
-## 3. How to Decode the Stream
-
-Because the messages are Protobuf, decoding them requires a specialized parser. We have created a lightweight, recursive Python parser in `gluesync_ws.py` that unpacks the binary wire-format without external dependencies.
-
-### The Recursive Parsing Approach
-Our custom `parse_protobuf` script reads the binary tags (Field ID + Wire Type):
-- **Wire Type 0 (Varint):** Decodes the live metrics/integers.
-- **Wire Type 2 (Length-Delimited):** Tries to decode as UTF-8 Strings. If it fails (due to control characters), it recognizes that it has hit a nested Protobuf message and *recursively* calls itself to unpack the next layer.
-
-### Example Decoded Output
-```json
-{
-  "Field_1_string": "PipelineStatusMessage",
-  "Field_2_message": {
-    "Field_1_string": "f590ab8c",
+* **Varints (Wire Type 0)**: Decodes operational metrics and integer enums.
+* **Length-Delimited (Wire Type 2)**: Attempts to decode as UTF-8. If it encounters control characters, it recursively calls itself to unpack nested message layers.
+* **Result**: Parses raw protobuf into generic JSON representations:
+  ```json
+  {
+    "Field_1_string": "MetricsMessage",
     "Field_2_message": {
-      "Field_1_string": "ship-at-scale-ibm-iseries",
-      "Field_2_string": "2.2.5 - build 4",
-      "Field_3_string": "user001@161.82.146.249",
-      "Field_10_varint": 500
-    }
-  }
-}
-```
-*Notice how Field 10 is `500`. In the raw binary, this would be unreadable bytes, but it represents a live metric (e.g., rows replicated).*
-
-### Example: Decoded `EntityStatusMessage`
-```json
-{
-  "Field_1_string": "EntityStatusMessage",
-  "Field_2_message": {
-    "Field_1_message": {
       "Field_1_message": {
-        "Field_1_string": "f590ab8c",      // Pipeline ID
-        "Field_2_string": "4bacd683",      // Entity ID
-        "Field_3_varint": 0,               // Error Flag / State
-        "Field_4_varint": 1,               // Status Enum (e.g., 1 = ACTIVE)
-        "Field_5_varint": 0,               // Hold Flag
-        "Field_6_varint": 0
-      }
-    }
-  }
-}
-```
-*In the `EntityStatusMessage`, the live status is located in **Field 4** (where `1` generally represents the "Active" enum state).*
-
-### Example: Decoded `MetricsMessage`
-```json
-{
-  "Field_1_string": "MetricsMessage",
-  "Field_2_message": {
-    "Field_1_message": {
-      "Field_1_message": {
-        "Field_1_string": "f590ab8c",               // Pipeline ID
-        "Field_2_message": {
-          "Field_1_string": "f590ab8c",             // Entity/Pipeline ID
-          "Field_2_varint": 1779001642299713119,    // Timestamp
-          "Field_4_varint": 415,                    // Metric 1 (e.g. Inserts)
-          "Field_5_varint": 58316,                  // Metric 2 (e.g. Updates)
-          "Field_6_varint": 130,                    // Metric 3 (e.g. Deletes)
-          "Field_7_varint": 5521654                 // Total Operations / Bytes
+        "Field_1_message": {
+          "Field_2_message": {
+            "Field_1_string": "GSLIBTST.CUSTOMERS",
+            "Field_2_string": "2026-05-21T08:01:35Z",
+            "Field_4_varint": 150,
+            "Field_5_varint": 320,
+            "Field_6_varint": 12,
+            "Field_7_varint": 482
+          }
         }
       }
     }
   }
-}
-```
-*The live replication numbers (like rows replicated) are cleanly extracted in fields 4, 5, 6, and 7.*
+  ```
 
 ---
 
-## 4. Architectural Client Options for `replica-mon`
+## 3. Capture Capability & Extensibility
 
-Now that we understand the data, we must decide how `replica-mon` will consume these metrics. 
+### Capture All Messages
+Because the low-level `SimpleWebSocket` socket receiver simply forwards raw payloads and the `parse_protobuf` script reads structural wire-format tag wrappers recursively, **the client is guaranteed to capture and parse all message types** (including undocumented, newly added, or custom messages).
 
-### Option 1: Decode in the Dashboard (Recommended)
-**Approach:** Connect to the WebSocket directly from the `replica-mon` HTML/JS dashboard via the browser, completely bypassing Python.
-- **Pros:** 
-  - The GlueSync UI is built with Angular/React, meaning their Javascript bundles *already contain the compiled Protobuf decoders*. 
-  - By reverse-engineering their Webpack bundles or using a tool like `protobuf.js`, the browser can automatically map `Field_10` back to `"rows_processed"`.
-  - Zero load on the Python backend; perfectly real-time.
-- **Cons:** Requires javascript development and extracting the `.proto` schemas from the vendor's frontend.
-
-### Option 2: Decode in the Python CLI (`gluesync_ws.py`)
-**Approach:** Continue using our recursive zero-dependency Python parser to extract the `Field_X_varint` metrics on the backend.
-- **Pros:** Keeps all logic strictly within the terminal/container.
-- **Cons:** Highly brittle. If Molo17 updates GlueSync and adds a new field, all the Field IDs shift, and your script breaks. You will have to manually figure out which varint corresponds to which metric by comparing the numbers to the dashboard.
-
-### Option 3: Fallback to the REST API
-**Approach:** Ignore the WebSocket completely and rely on the `GET /pipelines/{id}/entities` endpoint we built in `gluesync_cli_v2.py`.
-- **Pros:** 100% stable, perfectly formatted JSON.
-- **Cons:** It only provides static configuration health (e.g., `status: configured`), not live operational metrics (e.g., latency, CDC active, row counts).
-
-## Conclusion
-We have successfully bridged the WebSocket and cracked the binary payload. For the best integration into `replica-mon`, **Option 1** is highly recommended to leverage the vendor's existing Protobuf schemas in the browser.
+* **Unmapped Fields**: If GlueSync introduces a new message or field, the parser still decodes it into a generic representation (e.g., `Field_X_varint` or `Field_X_string`) and pushes it to the front-end stream console without crashing or throwing parse errors.
+* **Dynamic Metadata Enrichment**: On connection startup, the backend queries the REST API and caches the mapping between Entity IDs (e.g., `4bacd683`) and Entity Names (e.g., `GSLIBTST.THAI_TEST`). If a telemetry frame references an ID rather than a name, the backend performs a two-step lookup to resolve and append human-readable metadata in a `_enriched` block.

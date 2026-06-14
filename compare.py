@@ -54,7 +54,9 @@ def generate_report(
     since: str = None,
     output_format: str = "text",
     show_timezone: bool = True,
-    use_cache: bool = True
+    use_cache: bool = True,
+    pk_match: str = None,
+    delay_seconds: float = 30.0
 ):
     """
     Generate replication comparison report.
@@ -176,7 +178,24 @@ def generate_report(
     # 3. Compare
     print("[3/3] Comparing...")
     comparator = ChangeComparator()
-    comparison = comparator.compare(journal_summary, ct_summary)
+    
+    if pk_match:
+        # Load entries from caches for PK correlation
+        source_entries = journal_reader.cache.get_entries(source_table, since=since_for_as400)
+        # SQLite CT cache uses f"CT_{target_table}" internally
+        target_changes = ct_reader.cache.get_changes(f"CT_{target_table}", since=since)
+        
+        print(f"  [PK Match] Running PK correlation for {len(source_entries)} source entries vs {len(target_changes)} target changes...")
+        comparison = comparator.compare_with_delay_window(
+            source_entries,
+            target_changes,
+            pk_column=pk_match,
+            delay_seconds=delay_seconds,
+            as400_tz_offset=as400_tz_offset,
+            mssql_tz_offset=mssql_tz_offset
+        )
+    else:
+        comparison = comparator.compare(journal_summary, ct_summary)
     
     # 4. Generate report
     if output_format == "json":
@@ -195,41 +214,62 @@ def generate_report(
         print("COMPARISON RESULTS")
         print("=" * 70)
         
-        print(f"\n{'Operation':<15} {'AS400 Journal':>15} {'MSSQL CT':>15} {'Difference':>12} {'Status':>10}")
-        print("-" * 70)
-        
-        # Extract counts
-        j_inserts = journal_summary.get('inserts', 0)
-        j_updates = journal_summary.get('updates', 0)
-        j_deletes = journal_summary.get('deletes', 0)
-        j_total = journal_summary.get('total', 0)
-        
-        c_inserts = ct_summary.get('inserts', 0)
-        c_updates = ct_summary.get('updates', 0)
-        c_deletes = ct_summary.get('deletes', 0)
-        c_total = ct_summary.get('total', 0)
-        
-        # Print rows
-        for op_name, j_count, c_count in [
-            ("INSERT", j_inserts, c_inserts),
-            ("UPDATE", j_updates, c_updates),
-            ("DELETE", j_deletes, c_deletes),
-            ("TOTAL", j_total, c_total)
-        ]:
-            diff = j_count - c_count
-            status = "✅" if diff == 0 else "❌"
-            print(f"{op_name:<15} {j_count:>15} {c_count:>15} {diff:>+12} {status:>10}")
-        
-        print("=" * 70)
-        
-        # Overall status
-        if comparison.get('match', False):
-            print("\n✅ REPLICATION VERIFIED: All operations match!")
+        if pk_match:
+            print(f"Verification Mode: Primary Key Sliding Delay Window ({pk_match})")
+            print(f"Delay Tolerance:   {delay_seconds} seconds")
+            print("-" * 70)
+            print(f"{'Metric':<25} {'Count':>12}")
+            print("-" * 70)
+            print(f"{'Total Source Changes':<25} {comparison.get('total_source', 0):>12}")
+            print(f"{'Verified (Replicated)':<25} {comparison.get('verified', 0):>12}")
+            print(f"{'In-Flight (Pending)':<25} {comparison.get('in_flight', 0):>12}")
+            print(f"{'Discrepancies':<25} {comparison.get('discrepancies_count', 0):>12}")
+            print("=" * 70)
+            
+            if comparison.get('discrepancies_count', 0) == 0:
+                print("\n✅ REPLICATION VERIFIED: All transactions match or are in-flight!")
+            else:
+                print("\n❌ DISCREPANCY DETECTED!")
+                print("\nDiscrepancies:")
+                for disc in comparison.get('discrepancies', []):
+                    entry = disc['entry']
+                    print(f"  - PK {entry.get('entry_type')} (Seq {entry.get('entry_number')}): {disc['reason']}")
         else:
-            print("\n❌ DISCREPANCY DETECTED!")
-            print("\nDiscrepancies:")
-            for disc in comparison.get('discrepancies', []):
-                print(f"  - {disc}")
+            print(f"\n{'Operation':<15} {'AS400 Journal':>15} {'MSSQL CT':>15} {'Difference':>12} {'Status':>10}")
+            print("-" * 70)
+            
+            # Extract counts
+            j_inserts = journal_summary.get('inserts', 0)
+            j_updates = journal_summary.get('updates', 0)
+            j_deletes = journal_summary.get('deletes', 0)
+            j_total = journal_summary.get('total', 0)
+            
+            c_inserts = ct_summary.get('inserts', 0)
+            c_updates = ct_summary.get('updates', 0)
+            c_deletes = ct_summary.get('deletes', 0)
+            c_total = ct_summary.get('total', 0)
+            
+            # Print rows
+            for op_name, j_count, c_count in [
+                ("INSERT", j_inserts, c_inserts),
+                ("UPDATE", j_updates, c_updates),
+                ("DELETE", j_deletes, c_deletes),
+                ("TOTAL", j_total, c_total)
+            ]:
+                diff = j_count - c_count
+                status = "✅" if diff == 0 else "❌"
+                print(f"{op_name:<15} {j_count:>15} {c_count:>15} {diff:>+12} {status:>10}")
+            
+            print("=" * 70)
+            
+            # Overall status
+            if comparison.get('match', False):
+                print("\n✅ REPLICATION VERIFIED: All operations match!")
+            else:
+                print("\n❌ DISCREPANCY DETECTED!")
+                print("\nDiscrepancies:")
+                for disc in comparison.get('discrepancies', []):
+                    print(f"  - {disc}")
             
             # Auto-flag table for full caching
             if use_cache:
@@ -282,6 +322,8 @@ Examples:
     parser.add_argument("--clear-cache", action="store_true", help="Clear journal cache and exit")
     parser.add_argument("--reset-attention", action="store_true", help="Reset attention flag for table (downgrade to summary cache)")
     parser.add_argument("--list-attention", action="store_true", help="List all tables requiring attention")
+    parser.add_argument("--pk-match", help="Verify using Primary Key sliding window matching with the specified key column (e.g. ID)")
+    parser.add_argument("--delay-seconds", type=float, default=30.0, help="Replication lag tolerance window in seconds (default: 30.0)")
     
     args = parser.parse_args()
     
@@ -376,5 +418,7 @@ Examples:
         since=args.since,
         output_format=args.format,
         show_timezone=not args.no_timezone,
-        use_cache=not args.no_cache
+        use_cache=not args.no_cache,
+        pk_match=args.pk_match,
+        delay_seconds=args.delay_seconds
     )

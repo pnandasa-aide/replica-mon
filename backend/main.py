@@ -227,6 +227,18 @@ def stop_entity(pipeline_id: str, entity_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/pipelines/{pipeline_id}/entities/{entity_id}/resync")
+def resync_entity(pipeline_id: str, entity_id: str, snapshot_write_method: str = "UPSERT"):
+    try:
+        client = get_gluesync_client()
+        success = client.resync_entity(pipeline_id, entity_id, snapshot_write_method=snapshot_write_method)
+        if success:
+            return {"status": "success", "message": f"Entity {entity_id} resynced"}
+        raise HTTPException(status_code=500, detail="Failed to trigger resync")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────────────────────
 # Metrics REST Endpoints (SQLite I/U/D store)
 # ─────────────────────────────────────────────
@@ -489,9 +501,116 @@ def get_comparison_history(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ─────────────────────────────────────────────
-# WebSocket — Live Metrics Stream
-# ─────────────────────────────────────────────
+def enrich_with_metadata(data: dict, metadata_cache: dict) -> dict:
+    """
+    Enrich WebSocket metrics with human-readable metadata:
+    - Add entity/pipeline names with IDs
+    - Add field descriptions for numeric fields
+    - Convert timestamps to human-readable format
+    """
+    if not data:
+        return data
+    
+    msg_type = data.get("Field_1_string", "")
+    
+    if msg_type == "MetricsMessage":
+        inner = (data
+                 .get("Field_2_message", {})
+                 .get("Field_1_message", {})
+                 .get("Field_1_message", {})
+                 .get("Field_2_message", {}))
+        
+        if inner:
+            raw_entity = inner.get("Field_1_string", "")
+            
+            meta = metadata_cache.get(raw_entity)
+            if not meta:
+                for entity_name, entity_meta in metadata_cache.items():
+                    if entity_meta.get('id') == raw_entity:
+                        meta = entity_meta
+                        break
+            
+            entity_name = meta.get('name', raw_entity) if meta else raw_entity
+            entity_id = meta.get('id', raw_entity) if meta else raw_entity
+            source_table = meta.get('source_table', '') if meta else ''
+            target_table = meta.get('target_table', '') if meta else ''
+            
+            inserts = inner.get("Field_4_varint", 0) or 0
+            updates = inner.get("Field_5_varint", 0) or 0
+            deletes = inner.get("Field_6_varint", 0) or 0
+            total_ops = inner.get("Field_7_varint", 0) or 0
+            
+            inner['_enriched'] = {
+                'entity_display': f'{entity_id} "{entity_name}" entity',
+                'entity_name': entity_name,
+                'entity_id': entity_id,
+                'source_table': source_table,
+                'target_table': target_table,
+                'fields': {
+                    'Field_4_varint': {'name': 'inserts', 'value': inserts, 'description': 'Number of INSERT operations'},
+                    'Field_5_varint': {'name': 'updates', 'value': updates, 'description': 'Number of UPDATE operations'},
+                    'Field_6_varint': {'name': 'deletes', 'value': deletes, 'description': 'Number of DELETE operations'},
+                    'Field_7_varint': {'name': 'total_ops', 'value': total_ops, 'description': 'Total operations (inserts + updates + deletes)'}
+                }
+            }
+            
+            timestamp = inner.get("Field_2_string", "")
+            if timestamp:
+                try:
+                    ts_obj = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    inner['_enriched']['timestamp_human'] = ts_obj.strftime('%Y-%m-%d %H:%M:%S %Z')
+                except:
+                    try:
+                        ts_obj = datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc)
+                        inner['_enriched']['timestamp_human'] = ts_obj.strftime('%Y-%m-%d %H:%M:%S UTC')
+                    except:
+                        inner['_enriched']['timestamp_human'] = timestamp
+    
+    elif msg_type == "EntityStatusMessage":
+        inner = (data
+                 .get("Field_2_message", {})
+                 .get("Field_1_message", {}))
+        
+        # Check list format as well
+        raw_items = inner.get("Field_1_message_list", None)
+        if raw_items is None:
+            single = inner.get("Field_1_message")
+            raw_items = [single] if single else []
+
+        for item in raw_items:
+            if not item:
+                continue
+            raw_entity = item.get("Field_2_string", "")
+            status_val = item.get("Field_4_varint", 0)
+            
+            meta = metadata_cache.get(raw_entity)
+            if not meta:
+                for entity_name, entity_meta in metadata_cache.items():
+                    if entity_meta.get('id') == raw_entity:
+                        meta = entity_meta
+                        break
+            
+            entity_name = meta.get('name', raw_entity) if meta else raw_entity
+            entity_id = meta.get('id', raw_entity) if meta else raw_entity
+            
+            status_map = {
+                0: 'STOPPED',
+                1: 'RUNNING',
+                2: 'PAUSED',
+                3: 'ERROR'
+            }
+            status_str = status_map.get(status_val, f'UNKNOWN({status_val})')
+            
+            item['_enriched'] = {
+                'entity_display': f'{entity_id} "{entity_name}" entity',
+                'entity_name': entity_name,
+                'entity_id': entity_id,
+                'status_code': status_val,
+                'status_text': status_str,
+                'status_description': f'Entity is currently {status_str.lower()}'
+            }
+            
+    return data
 
 _entity_pipeline_map: dict = {}
 
@@ -549,20 +668,111 @@ async def websocket_endpoint(websocket: WebSocket, pipeline_id: str, entities: s
         token = rest_client.token
 
         ws_client = GlueSyncWebSocketClient(GLUESYNC_URL, token, verify_ssl=False)
-        ws_client.subscribe(pipeline_id, entity_list)
+        # Subscription moved to after WS connection is established
+
 
         loop = asyncio.get_event_loop()
 
         def on_message(data):
+            print(f"[ws] on_message received raw data type: {type(data)}", flush=True)
             try:
-                parsed_data = None
-                if isinstance(data, bytes):
-                    parsed_data = parse_protobuf(data)
-                elif isinstance(data, dict):
-                    parsed_data = data
-
-                if parsed_data and isinstance(parsed_data, dict):
+                normalized_messages = []
+                
+                # Check if this is the JSON telemetry format from GlueSync
+                if isinstance(data, dict) and "type" in data and "content" in data:
+                    msg_type = data.get("type", "")
+                    content = data.get("content", {})
+                    
+                    if msg_type == "EntityStatusMessage":
+                        pb_items = []
+                        for es in content.get("entitiesStatus", []):
+                            pb_items.append({
+                                "Field_1_string": es.get("pipelineId", ""),
+                                "Field_2_string": es.get("entityId", ""),
+                                "Field_3_varint": 1 if es.get("isMigrationActive") else 0,
+                                "Field_4_varint": 1 if es.get("isSyncActive") else 0,
+                                "Field_5_varint": 1 if es.get("isBusy") else 0,
+                            })
+                        if pb_items:
+                            normalized_messages.append({
+                                "Field_1_string": "EntityStatusMessage",
+                                "Field_2_message": {
+                                    "Field_1_message": {
+                                        "Field_1_message_list": pb_items,
+                                        "Field_1_message": pb_items[0]
+                                    }
+                                }
+                            })
+                            
+                    elif msg_type == "MetricsMessage":
+                        pipelines_metrics = content.get("pipelinesMetrics", {})
+                        for pid, pipe_data in pipelines_metrics.items():
+                            entities_metrics = pipe_data.get("entitiesMetrics", {})
+                            for eid, metric_list in entities_metrics.items():
+                                if not metric_list:
+                                    continue
+                                m = metric_list[0]
+                                inserts = m.get("inserts", 0)
+                                updates = m.get("updates", 0)
+                                deletes = m.get("deletes", 0)
+                                total_ops = m.get("totalOps", 0)
+                                timestamp_val = pipe_data.get("timestamp", 0)
+                                
+                                normalized_messages.append({
+                                    "Field_1_string": "MetricsMessage",
+                                    "Field_2_message": {
+                                        "Field_1_message": {
+                                            "Field_1_message": {
+                                                "Field_2_message": {
+                                                    "Field_1_string": eid,
+                                                    "Field_2_string": str(timestamp_val),
+                                                    "Field_4_varint": inserts,
+                                                    "Field_5_varint": updates,
+                                                    "Field_6_varint": deletes,
+                                                    "Field_7_varint": total_ops
+                                                }
+                                            }
+                                        }
+                                    }
+                                })
+                                
+                    elif msg_type == "PipelineStatusMessage":
+                        for ps in content.get("pipelinesStatus", []):
+                            pid = ps.get("pipelineId")
+                            for agent in ps.get("agentsInformation", []):
+                                agent_id = agent.get("agentId", "")
+                                if agent_id:
+                                    normalized_messages.append({
+                                        "Field_1_string": "AgentHealthMessage",
+                                        "Field_2_message": {
+                                            "Field_1_message": {
+                                                "Field_1_message": {
+                                                    "Field_2_message": {
+                                                        "Field_1_string": agent_id,
+                                                        "Field_2_string": agent.get("agentNickname", ""),
+                                                        "Field_3_string": agent.get("connectionStatus", "UNKNOWN"),
+                                                        "Field_4_string": agent.get("status", "UNKNOWN"),
+                                                        "Field_5_string": agent.get("connectedDatabaseHost", ""),
+                                                        "Field_6_string": agent.get("connectedDatabaseName", ""),
+                                                        "Field_7_string": agent.get("connectionError", "")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    })
+                else:
+                    parsed_data = None
+                    if isinstance(data, bytes):
+                        parsed_data = parse_protobuf(data)
+                    elif isinstance(data, dict):
+                        parsed_data = data
+                    if parsed_data:
+                        normalized_messages.append(parsed_data)
+                
+                # Process each normalized message
+                for parsed_data in normalized_messages:
                     msg_type = parsed_data.get("Field_1_string", "")
+                    print(f"[ws] on_message parsed message type: {msg_type}", flush=True)
 
                     if msg_type == "MetricsMessage":
                         inner = (parsed_data
@@ -593,13 +803,16 @@ async def websocket_endpoint(websocket: WebSocket, pipeline_id: str, entities: s
                     elif msg_type == "EntityStatusMessage":
                         inner = (parsed_data
                                  .get("Field_2_message", {})
-                                 .get("Field_1_message", {})
                                  .get("Field_1_message", {}))
-                        entities_status = inner.get("Field_1_message", {}).get("Field_2_message", []) if inner else []
-                        if not isinstance(entities_status, list):
-                            entities_status = [entities_status]
+                        
+                        raw_items = inner.get("Field_1_message_list", None)
+                        if raw_items is None:
+                            single = inner.get("Field_1_message")
+                            raw_items = [single] if single else []
 
-                        for estatus in entities_status:
+                        for estatus in raw_items:
+                            if not estatus:
+                                continue
                             pid_raw = estatus.get("Field_1_string", "")
                             ent_id_raw = estatus.get("Field_2_string", "")
                             is_migration = bool(estatus.get("Field_3_varint", 0))
@@ -625,6 +838,7 @@ async def websocket_endpoint(websocket: WebSocket, pipeline_id: str, entities: s
                             
                             if entity_name:
                                 store_entity_status(pid, entity_name, status_str)
+                                print(f"[ws] EntityStatus: {entity_name} -> {status_str} (sync={is_sync})", flush=True)
 
                     elif msg_type == "AgentHealthMessage":
                         inner = (parsed_data
@@ -654,15 +868,32 @@ async def websocket_endpoint(websocket: WebSocket, pipeline_id: str, entities: s
                             )
 
                     # Forward JSON representation to the browser client
+                    enriched_data = enrich_with_metadata(parsed_data, metadata_cache) if parsed_data else parsed_data
                     asyncio.run_coroutine_threadsafe(
-                        websocket.send_text(json.dumps(parsed_data)),
+                        websocket.send_text(json.dumps(enriched_data)),
                         loop
                     )
             except Exception as e:
                 print(f"[ws] Error processing message callback: {e}")
 
         ws_client.on_message = on_message
-        await loop.run_in_executor(None, ws_client.connect, on_message)
+        # Start connection in background thread first
+        def run_ws():
+            try:
+                ws_client.connect(on_message)
+            except Exception as ex:
+                print(f"[ws] ws_client.connect failed: {ex}")
+                import traceback
+                traceback.print_exc()
+
+        future = loop.run_in_executor(None, run_ws)
+        # Wait for WebSocket handshake to complete
+        await asyncio.sleep(1.0)
+        # Subscribe to metrics to trigger initial status stream
+        ws_client.subscribe(pipeline_id, entity_list)
+        
+        # Keep endpoint alive while the background WS connection is running
+        await future
 
     except WebSocketDisconnect:
         print("[ws] Browser disconnected")
@@ -765,6 +996,10 @@ class BackgroundComparisonEngine:
                 entity_name = ent.get('entityName', '')
                 if not entity_name:
                     continue
+
+                # Cache entity status from active REST API polling if present
+                if 'status' in ent and ent['status'] is not None:
+                    store_entity_status(pid, entity_name, ent['status'].upper())
 
                 # Extract source and target table info from agent entities
                 src_agent = None

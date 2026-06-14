@@ -123,22 +123,12 @@ When building the `replica-mon` container image, the `qadmcli` project is copied
    ```
 3. **Execution:** The verification task calls `AS400ConnectionManager` directly. It boots the Java Virtual Machine (`JPype`), initializes the JT400 JDBC driver (`jt400.jar`), connects to the database, executes `SELECT COUNT(*)`, and returns the results synchronously.
 
-### Mode 2: Shell/Subprocess Wrapper (Host/CLI Scripts)
+### Mode 2: Deprecated Subprocess Wrapper (Direct Import Execution inside Container)
 
-For command-line checks (e.g., `compare.py`, `monitor.py` or scheduled cron jobs) outside the web server:
-
-1. **Path Detection:** The Python scripts automatically detect the location of `qadmcli.sh` in the sibling directory (`../qadmcli/qadmcli.sh`) or respect the `QADMCLI_PATH` environment variable.
-2. **Subprocess Calls:** The script executes `qadmcli.sh` inside a Python `subprocess.run` session, invoking:
-   - `qadmcli journal entries` to retrieve AS400 entries.
-   - `qadmcli mssql ct changes` to read MSSQL Change Tracking.
-   - `qadmcli mssql ct status` to verify table change log state.
-3. **JSON Interception:** The output is intercepted, ANSI terminal escapes are stripped, the JSON block is isolated and parsed into Python dict structures:
-
-```python
-cmd = ["../qadmcli/qadmcli.sh", "journal", "entries", "-t", table, "-l", library, "--format", "json"]
-result = subprocess.run(cmd, capture_output=True, text=True)
-# Strips ANSI escapes and extracts json dictionaries
-```
+Previously, CLI scripts (e.g., `compare.py` or `monitor.py`) executed subprocesses calling `qadmcli.sh`. This has been refactored:
+1. **Containerized Execution:** All CLI scripts now run inside the `replica-mon` container containerized execution layer (orchestrated by `replica-mon.sh`).
+2. **Natively Shared Codebase:** The readers (`as400_journal.py` and `mssql_ct.py`) directly import `qadmcli` modules. Subprocess invocation overhead has been completely removed.
+3. **Double-Build Branch Dependency:** Because changes to `qadmcli` are compiled directly into the `replica-mon` image layer, changes in the sibling project require a rebuild of the container.
 
 ---
 

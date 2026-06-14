@@ -37,8 +37,8 @@ COPY qadmcli /opt/qadmcli
 RUN cp /opt/qadmcli/lib/jt400.jar /opt/jt400/jt400.jar || echo "jt400.jar not found in qadmcli"
 
 RUN pip install --upgrade pip && \
-    cd /opt/qadmcli && pip install . && \
-    pip install fastapi uvicorn websockets requests pydantic aiofiles httpx
+    cd /opt/qadmcli && pip install .[agent] && \
+    pip install fastapi uvicorn websockets requests pydantic aiofiles httpx oracledb
 
 # Create app directory
 WORKDIR /app

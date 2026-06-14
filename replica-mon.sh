@@ -59,6 +59,7 @@ fi
 # Run container for CLI tools
 if [[ "$*" == *"--format json"* ]]; then
     podman run -i --rm --name "$CONTAINER_NAME" \
+        -e AS400_HOST="$AS400_HOST" \
         -e AS400_USER="$AS400_USER" \
         -e AS400_PASSWORD="$AS400_PASSWORD" \
         -e MSSQL_USER="$MSSQL_USER" \
@@ -68,16 +69,18 @@ if [[ "$*" == *"--format json"* ]]; then
         -e GLUESYNC_HOST="$GLUESYNC_HOST" \
         -e GLUESYNC_ADMIN_USERNAME="$GLUESYNC_ADMIN_USERNAME" \
         -e GLUESYNC_ADMIN_PASSWORD="$GLUESYNC_ADMIN_PASSWORD" \
-        -e QADMCLI_PATH="qadmcli" \
+        -e QADMCLI_CONFIG="/app/qadmcli/config/connection.yaml" \
         -v "${SCRIPT_DIR}/cache:/app/replica-mon/cache:Z" \
         -v "${SCRIPT_DIR}/metrics:/app/replica-mon/metrics:Z" \
         -v "${SCRIPT_DIR}/../qadmcli/config:/app/qadmcli/config:Z" \
+        --network host \
         "${ENTRYPOINT_ARGS[@]}" "$IMAGE_NAME" "$@"
 else
     if [[ "$*" != *"--format json"* ]]; then
         echo "🚀 Running replica-mon CLI: $*"
     fi
     podman run -it --rm --name "$CONTAINER_NAME" \
+        -e AS400_HOST="$AS400_HOST" \
         -e AS400_USER="$AS400_USER" \
         -e AS400_PASSWORD="$AS400_PASSWORD" \
         -e MSSQL_USER="$MSSQL_USER" \
@@ -87,9 +90,10 @@ else
         -e GLUESYNC_HOST="$GLUESYNC_HOST" \
         -e GLUESYNC_ADMIN_USERNAME="$GLUESYNC_ADMIN_USERNAME" \
         -e GLUESYNC_ADMIN_PASSWORD="$GLUESYNC_ADMIN_PASSWORD" \
-        -e QADMCLI_PATH="qadmcli" \
+        -e QADMCLI_CONFIG="/app/qadmcli/config/connection.yaml" \
         -v "${SCRIPT_DIR}/cache:/app/replica-mon/cache:Z" \
         -v "${SCRIPT_DIR}/metrics:/app/replica-mon/metrics:Z" \
         -v "${SCRIPT_DIR}/../qadmcli/config:/app/qadmcli/config:Z" \
+        --network host \
         "${ENTRYPOINT_ARGS[@]}" "$IMAGE_NAME" "$@"
 fi
