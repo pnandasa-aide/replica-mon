@@ -178,7 +178,7 @@
             background-color: var(--surface-color);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
-            overflow: hidden;
+            overflow-x: auto;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
 
@@ -540,6 +540,39 @@
         .tab-panel { display: block; padding-top: 1.5rem; }
         .tab-panel.hidden { display: none; }
 
+        /* ── Sync Status / Comparison ── */
+        .sync-summary-cards {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 1rem; margin-bottom: 1.25rem;
+        }
+        .sync-summary-cards .card { text-align: center; padding: 1rem; }
+        .sync-summary-cards .card .card-value { font-size: 1.6rem; font-weight: 700; }
+        .sync-summary-cards .card .card-subtext { font-size: 0.72rem; }
+        .status-badge.in-sync { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+        .status-badge.replicating { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+        .status-badge.alert { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+        .status-badge.no-data { background: rgba(107, 114, 128, 0.15); color: #6b7280; }
+        .trend-icon { display: inline-flex; align-items: center; font-size: 0.8rem; margin-left: 4px; }
+        .trend-icon.growing { color: #ef4444; }
+        .trend-icon.shrinking { color: #10b981; }
+        .trend-icon.stable { color: #6b7280; }
+        .sync-refresh-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 0.75rem; font-size: 0.82rem; color: var(--text-secondary);
+        }
+        .sync-refresh-bar button {
+            padding: 0.35rem 0.85rem; border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--bg-secondary); color: var(--text-primary); cursor: pointer;
+            font-size: 0.8rem; font-weight: 600; transition: opacity 0.15s;
+        }
+        .sync-refresh-bar button:hover { opacity: 0.8; }
+        .sync-table th { white-space: nowrap; }
+        .sync-table .mono-text { font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 0.76rem; }
+        .gap-value { font-weight: 700; font-size: 0.85rem; }
+        .gap-zero { color: #10b981; }
+        .gap-positive { color: #f59e0b; }
+        .gap-alert { color: #ef4444; }
+
         /* ── Verify Tool ── */
         .verify-toolbar {
             display: flex;
@@ -752,17 +785,15 @@
         <div class="title-group">
             <h1>Replication Monitor</h1>
             <nav class="tab-nav" role="tablist">
-                <button class="tab-btn active" id="tab-btn-entities" onclick="switchTab('entities')" role="tab">📋 Entities List</button>
-                <button class="tab-btn" id="tab-btn-verify" onclick="switchTab('verify')" role="tab">🔍 Verify Tool</button>
-                <button class="tab-btn" id="tab-btn-reports" onclick="switchTab('reports')" role="tab">📜 Report History</button>
+                <a class="tab-btn active" id="tab-btn-entities" href="/monitor" role="tab">📋 Entities List</a>
+                <a class="tab-btn" id="tab-btn-verify" href="/tool" role="tab">🔍 Verify Tool</a>
+                <a class="tab-btn" id="tab-btn-wss" href="/wss" role="tab">📡 Telemetry Console</a>
+                                <a class="tab-btn" id="tab-btn-sync" href="#" onclick="event.preventDefault(); switchTab('sync');" role="tab">🔄 Sync Status</a>
             </nav>
         </div>
         <div class="controls">
             <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
                 <svg id="themeIcon" viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
-            </button>
-            <button class="theme-toggle" id="settingsToggle" title="Scheduler Settings" onclick="openSettingsModal()">
-                <svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
             <div class="config-select">
                 <label for="pipelineSelect">Pipeline:</label>
@@ -850,21 +881,20 @@
             <thead>
                 <tr>
                     <th>Status</th>
-                    <th>DB Health</th>
+                    <th class="action-cell">Actions</th>
                     <th>Entity Name</th>
                     <th>Source Table</th>
                     <th>Target Table</th>
                     <th>Configuration</th>
                     <th>Last Replication</th>
-                    <th>Journal Seq / CDC ID</th>
+                    <th>CDC Source Position</th>
                     <th>Throughput</th>
                     <th>Lag</th>
-                    <th class="action-cell">Actions</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td colspan="11" style="text-align: center; color: var(--text-secondary);">Loading entities...</td>
+                    <td colspan="10" style="text-align: center; color: var(--text-secondary);">Loading entities...</td>
                 </tr>
             </tbody>
         </table>
@@ -1000,6 +1030,75 @@
         </div>
     </div><!-- /tab-reports -->
 
+    <!-- ══ TAB 4: Sync Status ══ -->
+    <div id="tab-sync" class="tab-panel hidden" role="tabpanel">
+        <div class="verify-toolbar">
+            <h2>Source ↔ Target Sync Status</h2>
+            <div class="toolbar-right">
+                <span class="verify-status-label" id="syncStatusLabel">Select a pipeline to view</span>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="sync-summary-cards" id="syncSummaryCards">
+            <div class="card">
+                <div class="card-label">Entities Tracked</div>
+                <div class="card-value" id="syncTotalEntities">—</div>
+                <div class="card-subtext">In current pipeline</div>
+            </div>
+            <div class="card">
+                <div class="card-label">In Sync</div>
+                <div class="card-value" id="syncInSyncCount" style="color: #10b981;">—</div>
+                <div class="card-subtext">Gap = 0</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Replicating</div>
+                <div class="card-value" id="syncReplicatingCount" style="color: #f59e0b;">—</div>
+                <div class="card-subtext">Pending catch-up</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Alert</div>
+                <div class="card-value" id="syncAlertCount" style="color: #ef4444;">—</div>
+                <div class="card-subtext">Stalled / growing gap</div>
+            </div>
+            <div class="card">
+                <div class="card-label">No Data</div>
+                <div class="card-value" id="syncNoDataCount" style="color: #6b7280;">—</div>
+                <div class="card-subtext">Missing cache</div>
+            </div>
+        </div>
+
+        <!-- Refresh Bar -->
+        <div class="sync-refresh-bar">
+            <span id="syncLastUpdate">Last updated: —</span>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <span id="syncAutoRefreshLabel" style="font-size:0.78rem;">Auto-refresh: 30s</span>
+                <button onclick="refreshComparisonData()">↻ Refresh Now</button>
+            </div>
+        </div>
+
+        <!-- Comparison Table -->
+        <div class="table-container">
+            <table class="verify-table sync-table" id="syncTable">
+                <thead>
+                    <tr>
+                        <th>Entity Name</th>
+                        <th>Source Changes</th>
+                        <th>Target Changes</th>
+                        <th>Gap</th>
+                        <th>Trend</th>
+                        <th>Consecutive</th>
+                        <th>Status</th>
+                        <th>Cycle Time</th>
+                    </tr>
+                </thead>
+                <tbody id="syncTbody">
+                    <tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:2rem">Select a pipeline to view sync status.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div><!-- /tab-sync -->
+
 </div>
 
     <!-- ══ SETTINGS MODAL ══ -->
@@ -1008,7 +1107,7 @@
             <!-- Modal Header -->
             <div class="modal-header" style="padding:1.25rem 1.5rem; border-bottom:1px solid var(--border-color); display:flex; align-items:center; justify-content:space-between;">
                 <h2 style="margin:0; font-size:1.2rem; font-weight:700; color:var(--accent-primary); display:flex; align-items:center; gap:0.5rem;">
-                    ⚙️ Scheduler & Profiling Settings
+                    ⚙️ Scheduler & Profiles Settings
                 </h2>
                 <button onclick="closeSettingsModal()" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:1.5rem; font-weight:700; line-height:1;">×</button>
             </div>
@@ -1075,16 +1174,48 @@
                             <!-- Cron settings -->
                             <div style="margin-bottom:1rem; padding:0.75rem; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
                                 <label style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.25rem; font-weight:600;">Execution Cron Schedule</label>
-                                <select id="cronPresetSelect" onchange="applyCronPreset(this.value)" style="width:100%; padding:0.4rem; margin-bottom:0.5rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.85rem;">
+                                <select id="cronPresetSelect" onchange="applyCronPreset(this.value)" style="width:100%; padding:0.4rem; margin-bottom:0.75rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.85rem;">
                                     <option value="">-- Choose a Preset Template --</option>
-                                    <option value="0 1 * * *">Run every night at 01:00</option>
-                                    <option value="0 20 * * 5">Run every Friday at 20:00</option>
-                                    <option value="*/30 * * * *">Run every 30 minutes</option>
-                                    <option value="0 9 * * 1-5">Run every weekday at 09:00</option>
-                                    <option value="custom">Custom Cron Expression...</option>
+                                    <option value="* * * * *">Every minute (* * * * *)</option>
+                                    <option value="*/5 * * * *">Every 5 minutes (*/5 * * * *)</option>
+                                    <option value="*/15 * * * *">Every 15 minutes (*/15 * * * *)</option>
+                                    <option value="*/30 * * * *">Every 30 minutes (*/30 * * * *)</option>
+                                    <option value="0 * * * *">Hourly at minute 0 (0 * * * *)</option>
+                                    <option value="0 0,12 * * *">Twice daily at 00:00 & 12:00 (0 0,12 * * *)</option>
+                                    <option value="0 1 * * *">Daily at 01:00 AM (0 1 * * *)</option>
+                                    <option value="0 9 * * *">Daily at 09:00 AM (0 9 * * *)</option>
+                                    <option value="0 9 * * 1-5">Every weekday at 09:00 AM (0 9 * * 1-5)</option>
+                                    <option value="0 9 * * 0,6">Every weekend at 09:00 AM (0 9 * * 0,6)</option>
+                                    <option value="0 0 * * 0">Weekly on Sundays at 00:00 (0 0 * * 0)</option>
+                                    <option value="0 20 * * 5">Weekly on Fridays at 20:00 (0 20 * * 5)</option>
+                                    <option value="0 0 1 * *">Monthly on the 1st at 00:00 (0 0 1 * *)</option>
                                 </select>
-                                <input type="text" id="cronExpressionInput" placeholder="e.g. * * * * *" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;" readonly>
-                                <small style="display:block; font-size:0.7rem; color:var(--text-secondary); margin-top:0.25rem;">Format: Minute Hour Day-of-month Month Day-of-week (e.g. 0 1 * * *)</small>
+                                
+                                <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:0.5rem; margin-bottom:0.5rem;">
+                                    <div>
+                                        <span style="display:block; font-size:0.65rem; color:var(--text-secondary); text-align:center; margin-bottom:0.15rem;">Minute</span>
+                                        <input type="text" id="cronMin" placeholder="*" oninput="updateCronFromSplit()" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem; text-align:center;">
+                                    </div>
+                                    <div>
+                                        <span style="display:block; font-size:0.65rem; color:var(--text-secondary); text-align:center; margin-bottom:0.15rem;">Hour</span>
+                                        <input type="text" id="cronHour" placeholder="*" oninput="updateCronFromSplit()" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem; text-align:center;">
+                                    </div>
+                                    <div>
+                                        <span style="display:block; font-size:0.65rem; color:var(--text-secondary); text-align:center; margin-bottom:0.15rem;">Day (Month)</span>
+                                        <input type="text" id="cronDom" placeholder="*" oninput="updateCronFromSplit()" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem; text-align:center;">
+                                    </div>
+                                    <div>
+                                        <span style="display:block; font-size:0.65rem; color:var(--text-secondary); text-align:center; margin-bottom:0.15rem;">Month</span>
+                                        <input type="text" id="cronMonth" placeholder="*" oninput="updateCronFromSplit()" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem; text-align:center;">
+                                    </div>
+                                    <div>
+                                        <span style="display:block; font-size:0.65rem; color:var(--text-secondary); text-align:center; margin-bottom:0.15rem;">Day (Week)</span>
+                                        <input type="text" id="cronDow" placeholder="*" oninput="updateCronFromSplit()" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem; text-align:center;">
+                                    </div>
+                                </div>
+                                
+                                <input type="text" id="cronExpressionInput" placeholder="Combined expression" style="width:100%; padding:0.4rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-secondary); font-size:0.85rem; font-family:monospace; text-align:center;" readonly>
+                                <div id="cronHumanReadable" style="font-size:0.75rem; color:var(--status-running); margin-top:0.35rem; font-weight:600; text-align:center;">Every minute</div>
                             </div>
                             
                             <div style="display:flex; justify-content:end; gap:0.5rem;">
@@ -1241,6 +1372,34 @@
                             <input type="text" id="settingsLogPath" placeholder="/app/replica-mon/cache/scheduler.log" style="width:100%; max-width:500px; padding:0.45rem 0.75rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
                             <small style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-top:0.25rem;">Make sure the application has permission to write to this location.</small>
                         </div>
+                        
+                        <div style="margin-bottom:1.5rem; border-top:1px solid var(--border-color); padding-top:1.5rem;">
+                            <h4 style="margin-top:0; margin-bottom:1rem; font-size:1rem; color:var(--text-primary);">Application Logging Config</h4>
+                            
+                            <div style="margin-bottom:1rem;">
+                                <label style="display:block; font-size:0.8rem; font-weight:600; color:var(--text-primary); margin-bottom:0.25rem;">Application Log File Path (only standard out if not set)</label>
+                                <input type="text" id="settingsAppLogPath" placeholder="/app/replica-mon/logs/app.log" style="width:100%; max-width:500px; padding:0.45rem 0.75rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                                <small style="display:block; font-size:0.75rem; color:var(--text-secondary); margin-top:0.25rem;">Specifies the path for application logs. Standard out is used if left blank.</small>
+                            </div>
+                            
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; max-width:500px; margin-bottom:1rem;">
+                                <div>
+                                    <label style="display:block; font-size:0.8rem; font-weight:600; color:var(--text-primary); margin-bottom:0.25rem;">Application Log Level</label>
+                                    <select id="settingsAppLogLevel" style="width:100%; padding:0.45rem 0.75rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                                        <option value="INFO">INFO</option>
+                                        <option value="DEBUG">DEBUG</option>
+                                        <option value="WARNING">WARNING</option>
+                                        <option value="ERROR">ERROR</option>
+                                        <option value="CRITICAL">CRITICAL</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.8rem; font-weight:600; color:var(--text-primary); margin-bottom:0.25rem;">Max File Size (MB)</label>
+                                    <input type="number" id="settingsAppLogMaxSize" placeholder="10" min="1" style="width:100%; padding:0.45rem 0.75rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:0.85rem;">
+                                </div>
+                            </div>
+                        </div>
+                        
                         <button onclick="saveGlobalSettings()" style="padding:0.45rem 1rem; border-radius:6px; border:none; background:var(--accent-blue); color:#fff; font-weight:600; font-size:0.85rem; cursor:pointer;">
                             Save Settings
                         </button>
@@ -1255,6 +1414,13 @@
     // Constants for Host Resolution (supports both container service and local file testing)
     const API_HOST = window.location.hostname ? `${window.location.protocol}//${window.location.host}` : 'http://localhost:8081';
     const WS_HOST = window.location.hostname ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}` : 'ws://localhost:8081';
+
+    // Helper: format a group name for display
+    function formatGroupName(groupName, groupId) {
+        if (groupId === '_default') return 'Default Group';
+        if (groupName && groupName !== groupId) return groupName;
+        return groupId || 'Unknown';
+    }
 
     // Application State
     let allEntities = [];
@@ -1388,7 +1554,17 @@
                 console.error('[Pipeline] Error loading reports:', err);
             });
         }
+        
+        // If Sync Status tab is currently visible, reload its data too
+        const syncTab = document.getElementById('tab-sync');
+        if (syncTab && !syncTab.classList.contains('hidden')) {
+            console.log('[Pipeline] Sync tab is visible, reloading...');
+            loadComparisonData(pipelineId);
+        }
     }
+
+    let srcAgentId = '';
+    let tgtAgentId = '';
 
     async function loadEntities(pipelineId) {
         if (!pipelineId) return;
@@ -1402,6 +1578,42 @@
             if (!res.ok) throw new Error(`HTTP error ${res.status}`);
             allEntities = await res.json();
             
+            // Extract agent IDs from configuration for WebSocket status dot mapping
+            srcAgentId = '';
+            tgtAgentId = '';
+            if (allEntities && allEntities.length > 0) {
+                const firstEnt = allEntities[0];
+                if (firstEnt.agentEntities) {
+                    firstEnt.agentEntities.forEach(ae => {
+                        const type = ae.entityType?.type;
+                        const agentId = ae.agentId;
+                        if (type === 'Source') srcAgentId = agentId;
+                        if (type === 'Target') tgtAgentId = agentId;
+                    });
+                }
+            }
+
+            // Fetch comparison details to get current lag and journal sequence details
+            try {
+                const compRes = await fetch(`${API_HOST}/api/verify/${pipelineId}/comparison`);
+                if (compRes.ok) {
+                    const comparisonData = await compRes.json();
+                    const compMap = {};
+                    comparisonData.forEach(c => {
+                        compMap[c.entity_name] = c;
+                    });
+                    allEntities.forEach(ent => {
+                        const comp = compMap[ent.entityName];
+                        if (comp) {
+                            ent.lag = comp.gap;
+                            ent.lastJournalSeq = comp.source_last_seq || comp.last_journal_seq || 0;
+                        }
+                    });
+                }
+            } catch (compErr) {
+                console.warn("Could not load comparison metrics:", compErr);
+            }
+            
             populateGroupsFilter(allEntities);
             applyFiltersAndRender();
             
@@ -1414,6 +1626,12 @@
     }
 
     function populateGroupsFilter(entities) {
+        // Build groupId -> groupName lookup (from enriched backend data)
+        const nameMap = {};
+        entities.forEach(e => {
+            if (e.groupId) nameMap[e.groupId] = formatGroupName(e.groupName, e.groupId);
+        });
+
         const uniqueGroups = [...new Set(entities.map(e => e.groupId || '_default'))];
         
         // Retain the search input element
@@ -1424,10 +1642,11 @@
         `;
         
         uniqueGroups.forEach(g => {
+            const displayName = g === '_default' ? 'Default Group' : (nameMap[g] || g);
             const label = document.createElement('label');
             label.className = 'dropdown-item';
             label.innerHTML = `
-                <input type="checkbox" value="${g}" class="group-checkbox"> ${g === '_default' ? 'Default Group' : g}
+                <input type="checkbox" value="${g}" class="group-checkbox"> ${displayName}
             `;
             groupDropdown.appendChild(label);
         });
@@ -1478,7 +1697,7 @@
         tbody.innerHTML = '';
 
         if (entities.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-secondary);">No entities matched your filters.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-secondary);">No entities matched your filters.</td></tr>';
             return;
         }
 
@@ -1526,9 +1745,27 @@
                 configHtml = '<span style="color: var(--text-secondary); font-style: italic; font-size: 0.75rem;">Standard</span>';
             }
 
-            // Build DB health badge from targetAgentHealth (injected by REST API)
+            // Build DB health connection status dot for source agent
+            const srcHealth = ent.sourceAgentHealth;
+            let srcHealthDot = '';
+            if (srcHealth) {
+                const connStatus = srcHealth.connectionStatus || 'UNKNOWN';
+                const healthStatus = srcHealth.healthStatus || 'UNKNOWN';
+                const dbHost = srcHealth.connectedDbHost || '';
+                const dbName = srcHealth.connectedDbName || '';
+                const connErr = srcHealth.connectionError || '';
+                const isConn = connStatus === 'CONNECTED';
+                const isHealthy = healthStatus === 'HEALTHY';
+                const connColor = isConn ? 'var(--status-running)' : (connStatus === 'UNKNOWN' ? 'var(--text-secondary)' : 'var(--status-error)');
+                const tooltip = connErr
+                    ? `Source DB: ${connStatus} — Error: ${connErr}`
+                    : `Source DB: ${connStatus} / ${healthStatus}${dbHost ? ' — ' + dbHost : ''}${dbName ? '/' + dbName : ''}`;
+                srcHealthDot = `<span class="db-status-dot source-dot" title="${tooltip}" style="color:${connColor}; margin-right: 6px; font-size: 0.8rem; cursor: default;">●</span>`;
+            }
+
+            // Build DB health connection status dot for target agent
             const tgtHealth = ent.targetAgentHealth;
-            let healthHtml = '<span style="color:var(--text-secondary);font-size:0.75rem">—</span>';
+            let tgtHealthDot = '';
             if (tgtHealth) {
                 const connStatus = tgtHealth.connectionStatus || 'UNKNOWN';
                 const healthStatus = tgtHealth.healthStatus || 'UNKNOWN';
@@ -1538,39 +1775,68 @@
                 const isConn = connStatus === 'CONNECTED';
                 const isHealthy = healthStatus === 'HEALTHY';
                 const connColor = isConn ? 'var(--status-running)' : (connStatus === 'UNKNOWN' ? 'var(--text-secondary)' : 'var(--status-error)');
-                const connIcon = isConn ? '●' : (connStatus === 'UNKNOWN' ? '○' : '✕');
                 const tooltip = connErr
-                    ? `${connStatus} — Error: ${connErr}`
-                    : `${connStatus} / ${healthStatus}${dbHost ? ' — ' + dbHost : ''}${dbName ? '/' + dbName : ''}`;
-                healthHtml = `<span class="db-health-badge" title="${tooltip}"
-                    style="display:inline-flex;align-items:center;gap:4px;font-size:0.78rem;font-weight:600;
-                           color:${connColor};cursor:default;">
-                    <span style="font-size:0.7rem">${connIcon}</span>
-                    ${isConn ? (isHealthy ? 'OK' : 'Degraded') : (connStatus === 'UNKNOWN' ? 'N/A' : 'Offline')}
-                </span>`;
+                    ? `Target DB: ${connStatus} — Error: ${connErr}`
+                    : `Target DB: ${connStatus} / ${healthStatus}${dbHost ? ' — ' + dbHost : ''}${dbName ? '/' + dbName : ''}`;
+                tgtHealthDot = `<span class="db-status-dot target-dot" title="${tooltip}" style="color:${connColor}; margin-right: 6px; font-size: 0.8rem; cursor: default;">●</span>`;
             }
 
             const isRunning = status === 'RUNNING' || status === 'ACTIVE';
-            const actionBtn = isRunning
-                ? `<button class="btn-icon btn-pause" title="Pause Replication" onclick="toggleEntityReplication('${ent.entityName}', true)">
-                       <svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                   </button>`
-                : `<button class="btn-icon btn-play" title="Start Replication" onclick="toggleEntityReplication('${ent.entityName}', false)">
-                       <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                   </button>`;
+            let actionHtml = '';
+            if (isRunning) {
+                // Stop replication button
+                actionHtml += `
+                    <button class="btn-icon btn-pause" title="Stop Replication" onclick="toggleEntityReplication('${ent.entityId}', true)">
+                        <svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                    </button>
+                `;
+                // One-time Snapshot Resync button
+                actionHtml += `
+                    <button class="btn-icon btn-resync" title="Trigger One-time Snapshot Resync" onclick="resyncEntityReplication('${ent.entityId}')" style="margin-left: 6px; color: var(--accent-blue);">
+                        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor;"><path d="M19 8l-4 4h3c0 3.31-2.69 6-6 6-1.01 0-1.97-.25-2.8-.7l-1.46 1.46C8.97 19.54 10.43 20 12 20c4.42 0 8-3.58 8-8h3l-4-4zM6 12c0-3.31 2.69-6 6-6 1.01 0 1.97.25 2.8.7l1.46-1.46C15.03 4.46 13.57 4 12 4c-4.42 0-8 3.58-8 8H1l4 4 4-4H6z"/></svg>
+                    </button>
+                `;
+            } else {
+                // Start CDC replication (standard start, withSnapshot=false)
+                actionHtml += `
+                    <button class="btn-icon btn-play" title="Start CDC Replication" onclick="startEntityReplication('${ent.entityId}', false)">
+                        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    </button>
+                `;
+                // Start with Snapshot replication (initial sync start, withSnapshot=true)
+                actionHtml += `
+                    <button class="btn-icon btn-play-snapshot" title="Start Replication with Initial Snapshot" onclick="startEntityReplication('${ent.entityId}', true)" style="margin-left: 6px; color: var(--status-running);">
+                        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor;"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+                    </button>
+                `;
+            }
+
+            const lag = ent.lag !== undefined ? ent.lag : '-';
+            let lagHtml = '<span class="mono-text">-</span>';
+            if (lag !== '-') {
+                if (lag === 0) {
+                    lagHtml = `<span class="mono-text" style="color:var(--status-running);font-weight:600;">0 (In Sync)</span>`;
+                } else if (lag > 0) {
+                    lagHtml = `<span class="mono-text" style="color:var(--status-error);font-weight:600;">+${lag.toLocaleString()} (Behind)</span>`;
+                } else {
+                    lagHtml = `<span class="mono-text" style="color:var(--accent-blue);font-weight:600;">${lag.toLocaleString()}</span>`;
+                }
+            }
+
+            const lastSeq = ent.lastJournalSeq !== undefined && ent.lastJournalSeq !== 0 ? ent.lastJournalSeq : '-';
+            const seqHtml = `<span class="mono-text">${lastSeq !== '-' ? lastSeq.toLocaleString() : '-'}</span>`;
 
             tr.innerHTML = `
                 <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-                <td class="agent-health-cell">${healthHtml}</td>
-                <td><span class="entity-name">${ent.entityName}</span><span class="sub-text">Group: ${ent.groupId || 'default'}</span></td>
-                <td><span class="mono-text">${srcTable}</span></td>
-                <td><span class="mono-text">${tgtTable}</span></td>
+                <td class="action-cell">${actionHtml}</td>
+                <td><span class="entity-name">${ent.entityName}</span><span class="sub-text">Group: ${formatGroupName(ent.groupName, ent.groupId)}</span></td>
+                <td>${srcHealthDot}<span class="mono-text">${srcTable}</span></td>
+                <td>${tgtHealthDot}<span class="mono-text">${tgtTable}</span></td>
                 <td>${configHtml}</td>
                 <td class="last-replication">Pending metrics<span class="sub-text">-</span></td>
-                <td class="journal-seq"><span class="mono-text">-</span></td>
+                <td class="journal-seq">${seqHtml}</td>
                 <td class="throughput">0 rec/s<span class="sub-text">0 total</span></td>
-                <td class="lag"><span class="mono-text">-</span></td>
-                <td class="action-cell">${actionBtn}</td>
+                <td class="lag">${lagHtml}</td>
             `;
 
             tbody.appendChild(tr);
@@ -1602,27 +1868,70 @@
         document.querySelector('.summary-cards .card:nth-child(4) .card-subtext').textContent = error > 0 ? `${error} with errors` : 'Healthy';
     }
 
-    // Toggle Play/Pause API actions
-    async function toggleEntityReplication(entityName, isRunning) {
-        const action = isRunning ? 'stop' : 'start';
-        const row = document.querySelector(`tr[data-entity-name="${entityName}"]`);
+    async function startEntityReplication(entityId, withSnapshot) {
+        const row = document.querySelector(`tr[data-entity-id="${entityId}"]`);
         if (!row) return;
 
         const actionCell = row.querySelector('.action-cell');
-        actionCell.innerHTML = '<span class="mono-text">Wait...</span>';
+        actionCell.innerHTML = '<span class="mono-text">Starting...</span>';
 
         try {
-            const res = await fetch(`${API_HOST}/api/pipelines/${selectedPipelineId}/entities/${entityName}/${action}`, {
+            const res = await fetch(`${API_HOST}/api/pipelines/${selectedPipelineId}/entities/${entityId}/start?with_snapshot=${withSnapshot}`, {
                 method: 'POST'
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
             
-            // Reload entities to fetch the updated state
             await loadEntities(selectedPipelineId);
         } catch (err) {
-            console.error(`Error trying to ${action} replication:`, err);
-            alert(`Replication command failed: ${err.message}`);
+            console.error(`Error starting replication:`, err);
+            alert(`Start replication failed: ${err.message}`);
             await loadEntities(selectedPipelineId);
+        }
+    }
+
+    async function resyncEntityReplication(entityId) {
+        const row = document.querySelector(`tr[data-entity-id="${entityId}"]`);
+        if (!row) return;
+
+        const actionCell = row.querySelector('.action-cell');
+        actionCell.innerHTML = '<span class="mono-text">Resyncing...</span>';
+
+        try {
+            const res = await fetch(`${API_HOST}/api/pipelines/${selectedPipelineId}/entities/${entityId}/resync`, {
+                method: 'POST'
+            });
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            
+            alert(`One-time Snapshot Resync triggered successfully.`);
+            await loadEntities(selectedPipelineId);
+        } catch (err) {
+            console.error(`Error triggering resync:`, err);
+            alert(`Resync failed: ${err.message}`);
+            await loadEntities(selectedPipelineId);
+        }
+    }
+
+    // Toggle Play/Pause API actions (Stop action helper)
+    async function toggleEntityReplication(entityId, isRunning) {
+        if (isRunning) {
+            const row = document.querySelector(`tr[data-entity-id="${entityId}"]`);
+            if (!row) return;
+
+            const actionCell = row.querySelector('.action-cell');
+            actionCell.innerHTML = '<span class="mono-text">Stopping...</span>';
+
+            try {
+                const res = await fetch(`${API_HOST}/api/pipelines/${selectedPipelineId}/entities/${entityId}/stop`, {
+                    method: 'POST'
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                
+                await loadEntities(selectedPipelineId);
+            } catch (err) {
+                console.error(`Error stopping replication:`, err);
+                alert(`Stop replication failed: ${err.message}`);
+                await loadEntities(selectedPipelineId);
+            }
         }
     }
 
@@ -1710,12 +2019,19 @@
                         badge.textContent = statusText;
                     }
                     if (actionCell) {
+                        const entityId = row.getAttribute('data-entity-id') || entityIdOrName;
                         actionCell.innerHTML = isRunning
-                            ? `<button class="btn-icon btn-pause" title="Pause Replication" onclick="toggleEntityReplication('${row.getAttribute('data-entity-name')}', true)">
+                            ? `<button class="btn-icon btn-pause" title="Stop Replication" onclick="toggleEntityReplication('${entityId}', true)">
                                    <svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                               </button>
+                               <button class="btn-icon btn-resync" title="Trigger One-time Snapshot Resync" onclick="resyncEntityReplication('${entityId}')" style="margin-left: 6px; color: var(--accent-blue);">
+                                   <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor;"><path d="M19 8l-4 4h3c0 3.31-2.69 6-6 6-1.01 0-1.97-.25-2.8-.7l-1.46 1.46C8.97 19.54 10.43 20 12 20c4.42 0 8-3.58 8-8h3l-4-4zM6 12c0-3.31 2.69-6 6-6 1.01 0 1.97.25 2.8.7l1.46-1.46C15.03 4.46 13.57 4 12 4c-4.42 0-8 3.58-8 8H1l4 4 4-4H6z"/></svg>
                                </button>`
-                            : `<button class="btn-icon btn-play" title="Start Replication" onclick="toggleEntityReplication('${row.getAttribute('data-entity-name')}', false)">
+                            : `<button class="btn-icon btn-play" title="Start CDC Replication" onclick="startEntityReplication('${entityId}', false)">
                                    <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                               </button>
+                               <button class="btn-icon btn-play-snapshot" title="Start Replication with Initial Snapshot" onclick="startEntityReplication('${entityId}', true)" style="margin-left: 6px; color: var(--status-running);">
+                                   <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor;"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
                                </button>`;
                     }
                 });
@@ -1742,22 +2058,19 @@
             const isHealthy = healthStatus === 'HEALTHY';
 
             const connColor = isConn ? 'var(--status-running)' : (connStatus === 'UNKNOWN' ? 'var(--text-secondary)' : 'var(--status-error)');
-            const connIcon = isConn ? '●' : (connStatus === 'UNKNOWN' ? '○' : '✕');
-            const label = isConn ? (isHealthy ? 'OK' : 'Degraded') : (connStatus === 'UNKNOWN' ? 'N/A' : 'Offline');
             const tooltip = connErr
                 ? `${connStatus} — Error: ${connErr}`
                 : `${connStatus} / ${healthStatus}${dbHost ? ' — ' + dbHost : ''}${dbName ? '/' + dbName : ''}`;
-            const healthHtml = `<span class="db-health-badge" title="${tooltip}"
-                style="display:inline-flex;align-items:center;gap:4px;font-size:0.78rem;font-weight:600;
-                       color:${connColor};cursor:default;">
-                <span style="font-size:0.7rem">${connIcon}</span>${label}
-            </span>`;
 
-            // Update ALL rows' health cell — agent health applies to all entities in the pipeline
-            // (same target DB for all entities)
-            document.querySelectorAll('td.agent-health-cell').forEach(cell => {
-                cell.innerHTML = healthHtml;
-            });
+            // Update the connection dots dynamically based on resolved agent type
+            if (agentId && (agentId === srcAgentId || agentId === tgtAgentId)) {
+                const isSource = agentId === srcAgentId;
+                const dotClass = isSource ? '.source-dot' : '.target-dot';
+                document.querySelectorAll(dotClass).forEach(dot => {
+                    dot.style.color = connColor;
+                    dot.setAttribute('title', (isSource ? 'Source DB: ' : 'Target DB: ') + tooltip);
+                });
+            }
 
         } else if (msgType === "MetricsMessage") {
             const inner = msg.Field_2_message?.Field_1_message?.Field_1_message?.Field_2_message;
@@ -1825,6 +2138,11 @@
         document.getElementById(`tab-${tabName}`).classList.remove('hidden');
         document.getElementById(`tab-btn-${tabName}`).classList.add('active');
 
+        // Stop sync auto-refresh when leaving sync tab
+        if (tabName !== 'sync') {
+            stopSyncAutoRefresh();
+        }
+
         // If switching to Verify tab and we have a pipeline selected, load its data
         if (tabName === 'verify' && selectedPipelineId) {
             console.log('[Tab] Switched to Verify tab, loading pipeline:', selectedPipelineId);
@@ -1836,6 +2154,12 @@
             loadReports(selectedPipelineId).catch(err => {
                 console.error('[Tab] Error loading reports:', err);
             });
+        } else if (tabName === 'sync') {
+            console.log('[Tab] Switched to Sync Status tab, loading comparison data:', selectedPipelineId);
+            if (selectedPipelineId) {
+                loadComparisonData(selectedPipelineId);
+                startSyncAutoRefresh();
+            }
         }
     }
 
@@ -2293,6 +2617,9 @@
             if (res.ok) {
                 const settings = await res.json();
                 document.getElementById('settingsLogPath').value = settings.log_path || '/app/replica-mon/cache/scheduler.log';
+                document.getElementById('settingsAppLogPath').value = settings.app_log_path || '';
+                document.getElementById('settingsAppLogLevel').value = settings.app_log_level || 'INFO';
+                document.getElementById('settingsAppLogMaxSize').value = settings.app_log_max_size || '10';
             }
         } catch (err) {
             console.error('Error loading settings:', err);
@@ -2301,11 +2628,20 @@
 
     window.saveGlobalSettings = async function() {
         const logPath = document.getElementById('settingsLogPath').value;
+        const appLogPath = document.getElementById('settingsAppLogPath').value;
+        const appLogLevel = document.getElementById('settingsAppLogLevel').value;
+        const appLogMaxSizeVal = document.getElementById('settingsAppLogMaxSize').value;
+        const appLogMaxSize = appLogMaxSizeVal ? parseInt(appLogMaxSizeVal, 10) : 10;
         try {
             const res = await fetch(`${API_HOST}/api/settings`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ log_path: logPath })
+                body: JSON.stringify({
+                    log_path: logPath,
+                    app_log_path: appLogPath,
+                    app_log_level: appLogLevel,
+                    app_log_max_size: appLogMaxSize
+                })
             });
             if (res.ok) {
                 alert('Global settings saved successfully.');
@@ -2388,6 +2724,75 @@
         }
     }
 
+    function getCronDescription(cron) {
+        if (!cron) return 'Please enter a cron expression';
+        const parts = cron.trim().split(/\s+/);
+        if (parts.length !== 5) return 'Invalid cron format (must be 5 space-separated parts)';
+        const [m, h, dom, mon, dow] = parts;
+        
+        let desc = '';
+        
+        // 1. Time (Minute & Hour)
+        if (m === '*' && h === '*') {
+            desc = 'Every minute';
+        } else if (m.startsWith('*/') && h === '*') {
+            desc = `Every ${m.split('/')[1]} minutes`;
+        } else if (m === '0' && h === '*') {
+            desc = 'Every hour at minute 0';
+        } else if (m === '0' && h.startsWith('*/')) {
+            desc = `Every ${h.split('/')[1]} hours (at minute 0)`;
+        } else if (!m.includes('*') && !h.includes('*') && !m.includes(',') && !h.includes(',')) {
+            desc = `Daily at ${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
+        } else {
+            desc = `At minute ${m} of hour ${h}`;
+        }
+        
+        // 2. Day of Week / Month rule
+        if (dom === '*' && dow === '*') {
+            if (!desc.startsWith('Every minute') && !desc.startsWith('Every')) {
+                desc += ' every day';
+            }
+        } else if (dom === '*' && dow !== '*') {
+            if (dow === '1-5') {
+                desc += ' on weekdays';
+            } else if (dow === '0,6' || dow === '6,0') {
+                desc += ' on weekends';
+            } else {
+                const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                const list = dow.split(',').map(d => {
+                    if (d.includes('-')) {
+                        const [s, e] = d.split('-').map(Number);
+                        return `${days[s] || s} through ${days[e] || e}`;
+                    }
+                    return days[Number(d)] || d;
+                });
+                desc += ' on ' + list.join(', ');
+            }
+        } else if (dom !== '*' && dow === '*') {
+            desc += ` on day ${dom} of the month`;
+        } else {
+            desc += ` on day ${dom} of month and day of week ${dow}`;
+        }
+        
+        // 3. Month
+        if (mon !== '*') {
+            desc += ` in month ${mon}`;
+        }
+        
+        return desc;
+    }
+
+    window.updateCronFromSplit = function() {
+        const min = document.getElementById('cronMin').value.trim() || '*';
+        const hour = document.getElementById('cronHour').value.trim() || '*';
+        const dom = document.getElementById('cronDom').value.trim() || '*';
+        const month = document.getElementById('cronMonth').value.trim() || '*';
+        const dow = document.getElementById('cronDow').value.trim() || '*';
+        const combined = `${min} ${hour} ${dom} ${month} ${dow}`;
+        document.getElementById('cronExpressionInput').value = combined;
+        document.getElementById('cronHumanReadable').textContent = getCronDescription(combined);
+    };
+
     window.showCreateJobForm = function() {
         _editingJobId = null;
         document.getElementById('jobFormContainer').style.display = 'block';
@@ -2397,8 +2802,14 @@
         document.getElementById('jobReportProfileSelect').innerHTML = '<option value="">-- Choose Pipeline First --</option>';
         document.getElementById('jobMailerProfileSelect').value = '';
         document.getElementById('cronPresetSelect').value = '';
-        document.getElementById('cronExpressionInput').value = '';
-        document.getElementById('cronExpressionInput').readOnly = true;
+        
+        // Reset split inputs
+        document.getElementById('cronMin').value = '*';
+        document.getElementById('cronHour').value = '*';
+        document.getElementById('cronDom').value = '*';
+        document.getElementById('cronMonth').value = '*';
+        document.getElementById('cronDow').value = '*';
+        updateCronFromSplit();
     };
 
     window.editJob = async function(id) {
@@ -2421,18 +2832,18 @@
         document.getElementById('jobReportProfileSelect').value = job.report_profile_id;
         document.getElementById('jobMailerProfileSelect').value = job.mailer_profile_id;
         
-        // Handle cron preset matching
-        const presetSelect = document.getElementById('cronPresetSelect');
-        const presets = ['* * * * *', '0 1 * * *', '0 20 * * 5'];
-        if (presets.includes(job.cron_expression)) {
-            presetSelect.value = job.cron_expression;
-            document.getElementById('cronExpressionInput').value = job.cron_expression;
-            document.getElementById('cronExpressionInput').readOnly = true;
-        } else {
-            presetSelect.value = 'custom';
-            document.getElementById('cronExpressionInput').value = job.cron_expression;
-            document.getElementById('cronExpressionInput').readOnly = false;
+        // Handle cron preset/split inputs matching
+        const cronExpr = job.cron_expression || '* * * * *';
+        const parts = cronExpr.split(' ');
+        if (parts.length === 5) {
+            document.getElementById('cronMin').value = parts[0];
+            document.getElementById('cronHour').value = parts[1];
+            document.getElementById('cronDom').value = parts[2];
+            document.getElementById('cronMonth').value = parts[3];
+            document.getElementById('cronDow').value = parts[4];
         }
+        updateCronFromSplit();
+        document.getElementById('cronPresetSelect').value = '';
     };
 
     window.cancelCreateJob = function() {
@@ -2477,16 +2888,15 @@
     };
 
     window.applyCronPreset = function(val) {
-        const input = document.getElementById('cronExpressionInput');
-        if (val === 'custom') {
-            input.value = '* * * * *';
-            input.readOnly = false;
-        } else if (val) {
-            input.value = val;
-            input.readOnly = true;
-        } else {
-            input.value = '';
-            input.readOnly = true;
+        if (!val) return;
+        const parts = val.split(' ');
+        if (parts.length === 5) {
+            document.getElementById('cronMin').value = parts[0];
+            document.getElementById('cronHour').value = parts[1];
+            document.getElementById('cronDom').value = parts[2];
+            document.getElementById('cronMonth').value = parts[3];
+            document.getElementById('cronDow').value = parts[4];
+            updateCronFromSplit();
         }
     };
 
@@ -3032,6 +3442,146 @@
             logsDiv.textContent = 'Error: ' + err.message;
         }
     };
+
+
+    // ── Sync Status / Comparison Functions ──
+    let _syncAutoRefreshTimer = null;
+
+    async function loadComparisonData(pipelineId) {
+        if (!pipelineId) return;
+        const tbody = document.getElementById('syncTbody');
+        const label = document.getElementById('syncStatusLabel');
+        if (!tbody || !label) return;
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:1.5rem">Loading sync status...</td></tr>';
+        label.textContent = 'Loading...';
+
+        try {
+            const res = await fetch(`${API_HOST}/api/verify/${pipelineId}/comparison`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            renderComparisonData(data, pipelineId);
+            label.textContent = `${data.length} entit${data.length === 1 ? 'y' : 'ies'} tracked`;
+        } catch (err) {
+            console.error('[Sync] Error loading comparison data:', err);
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--status-error);padding:1.5rem">Error: ${err.message}</td></tr>`;
+            label.textContent = 'Error loading data';
+        }
+    }
+
+    function renderComparisonData(data, pipelineId) {
+        // Update summary cards
+        const total = data.length;
+        const inSync = data.filter(e => e.status === 'in_sync').length;
+        const replicating = data.filter(e => e.status === 'replicating').length;
+        const alertCount = data.filter(e => e.status === 'alert').length;
+        const noData = data.filter(e => e.status === 'no_source_cache' || e.status === 'no_target_cache' || e.status === 'pending').length;
+
+        document.getElementById('syncTotalEntities').textContent = total;
+        document.getElementById('syncInSyncCount').textContent = inSync;
+        document.getElementById('syncReplicatingCount').textContent = replicating;
+        document.getElementById('syncAlertCount').textContent = alertCount;
+        document.getElementById('syncNoDataCount').textContent = noData;
+
+        // Update last update time
+        document.getElementById('syncLastUpdate').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+
+        // Render table
+        const tbody = document.getElementById('syncTbody');
+        tbody.innerHTML = '';
+
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:2rem">No comparison data available yet. The background engine may still be initializing.</td></tr>';
+            return;
+        }
+
+        data.forEach(ent => {
+            const tr = document.createElement('tr');
+
+            const gap = ent.gap || 0;
+            let gapClass = 'gap-zero';
+            let gapDisplay = '0';
+            if (gap > 0) {
+                gapClass = ent.status === 'alert' ? 'gap-alert' : 'gap-positive';
+                gapDisplay = `+${gap}`;
+            } else if (gap < 0) {
+                gapClass = 'gap-alert';
+                gapDisplay = `${gap}`;
+            }
+
+            // Trend icon
+            let trendIcon = '';
+            const trend = (ent.gap_trend || 'stable').toLowerCase();
+            if (trend === 'growing') {
+                trendIcon = '<span class="trend-icon growing">↗ growing</span>';
+            } else if (trend === 'shrinking') {
+                trendIcon = '<span class="trend-icon shrinking">↘ shrinking</span>';
+            } else {
+                trendIcon = '<span class="trend-icon stable">→ stable</span>';
+            }
+
+            // Status badge
+            let statusBadgeClass = 'status-stopped';
+            let statusLabel = ent.status || 'pending';
+            if (ent.status === 'in_sync') {
+                statusBadgeClass = 'in-sync';
+                statusLabel = 'In Sync';
+            } else if (ent.status === 'replicating') {
+                statusBadgeClass = 'replicating';
+                statusLabel = 'Replicating';
+            } else if (ent.status === 'alert') {
+                statusBadgeClass = 'alert';
+                statusLabel = 'Alert';
+            } else if (ent.status === 'no_source_cache' || ent.status === 'no_target_cache') {
+                statusBadgeClass = 'no-data';
+                statusLabel = ent.status === 'no_source_cache' ? 'No Source' : 'No Target';
+            } else {
+                statusBadgeClass = 'no-data';
+                statusLabel = 'Pending';
+            }
+
+            const cycleStart = ent.cycle_start || '-';
+            const cycleEnd = ent.cycle_end || '-';
+            const cycleTime = cycleStart !== '-' && cycleEnd !== '-' ? cycleEnd : cycleStart;
+
+            tr.innerHTML = `
+                <td><span class="entity-name">${ent.entity_name || '-'}</span></td>
+                <td class="mono-text">${ent.source_changes || 0}
+                    <span class="sub-text">I:${ent.source_inserts || 0} U:${ent.source_updates || 0} D:${ent.source_deletes || 0}</span>
+                </td>
+                <td class="mono-text">${ent.target_changes || 0}
+                    <span class="sub-text">I:${ent.target_inserts || 0} U:${ent.target_updates || 0} D:${ent.target_deletes || 0}</span>
+                </td>
+                <td class="gap-value ${gapClass}">${gapDisplay}</td>
+                <td>${trendIcon}</td>
+                <td class="mono-text">${ent.consecutive_cycles_gap_positive || 0}</td>
+                <td><span class="status-badge ${statusBadgeClass}">${statusLabel}</span></td>
+                <td class="mono-text" style="font-size:0.72rem;">${cycleTime}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function refreshComparisonData() {
+        if (selectedPipelineId) {
+            loadComparisonData(selectedPipelineId);
+        }
+    }
+
+    function startSyncAutoRefresh() {
+        stopSyncAutoRefresh();
+        _syncAutoRefreshTimer = setInterval(() => {
+            if (selectedPipelineId) {
+                loadComparisonData(selectedPipelineId);
+            }
+        }, 30000);
+    }
+
+    function stopSyncAutoRefresh() {
+        if (_syncAutoRefreshTimer) {
+            clearInterval(_syncAutoRefreshTimer);
+            _syncAutoRefreshTimer = null;
+        }
+    }
 
 
     // Initial Bootstrap

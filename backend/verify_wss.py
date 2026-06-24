@@ -22,6 +22,7 @@ try:
         REPORTS_DIR,
         METRICS_DB_PATH,
         GLUESYNC_URL,
+        configure_app_logging,
     )
 except ModuleNotFoundError:
     from shared import (
@@ -34,6 +35,7 @@ except ModuleNotFoundError:
         REPORTS_DIR,
         METRICS_DB_PATH,
         GLUESYNC_URL,
+        configure_app_logging,
     )
 
 logger = logging.getLogger("replica_mon.verify_wss")
@@ -55,6 +57,9 @@ class ApiProxyRequest(BaseModel):
 
 class SettingsRequest(BaseModel):
     log_path: str
+    app_log_path: Optional[str] = None
+    app_log_level: Optional[str] = None
+    app_log_max_size: Optional[int] = None
 
 class ReportProfileRequest(BaseModel):
     id: Optional[int] = None
@@ -168,8 +173,18 @@ def _verify_worker(pipeline_id: str, entities: list):
             try:
                 logger.info(f"[verify]   Source ({src_tag}) → Counting {src_library}.{src_table}...")
                 src_cnt, src_ts = _get_database_count(src_tag, src_library, src_table, pipeline_id, src_agent_id)
+                
+                # Use current local check timestamp instead of database last modified timestamp
+                from zoneinfo import ZoneInfo
+                try:
+                    local_tz = ZoneInfo("Asia/Bangkok")
+                except:
+                    local_tz = None
+                now_local = datetime.now(local_tz) if local_tz else datetime.now()
+                src_check_time = now_local.strftime("%Y-%m-%d %H:%M:%S")
+                
                 result["source_count"]   = src_cnt
-                result["source_last_ts"] = src_ts or "—"
+                result["source_last_ts"] = src_check_time
                 logger.info(f"[verify]   Source ({src_tag}) ✓ Count={src_cnt}")
             except Exception as e:
                 import traceback
@@ -188,8 +203,18 @@ def _verify_worker(pipeline_id: str, entities: list):
             try:
                 logger.info(f"[verify]   Target ({tgt_tag}) → Counting {tgt_schema}.{tgt_table}...")
                 cnt, ts = _get_database_count(tgt_tag, tgt_schema, tgt_table, pipeline_id, tgt_agent_id)
+                
+                # Use current local check timestamp instead of database last modified timestamp
+                from zoneinfo import ZoneInfo
+                try:
+                    local_tz = ZoneInfo("Asia/Bangkok")
+                except:
+                    local_tz = None
+                now_local = datetime.now(local_tz) if local_tz else datetime.now()
+                tgt_check_time = now_local.strftime("%Y-%m-%d %H:%M:%S")
+                
                 result["target_count"]   = cnt
-                result["target_last_ts"] = ts or "—"
+                result["target_last_ts"] = tgt_check_time
                 logger.info(f"[verify]   Target ({tgt_tag}) ✓ Count={cnt}")
             except Exception as e:
                 err = str(e)
@@ -841,7 +866,12 @@ def save_settings(req: SettingsRequest):
     try:
         conn = get_db()
         conn.execute("INSERT OR REPLACE INTO scheduler_settings (key, value) VALUES ('log_path', ?)", (req.log_path,))
+        conn.execute("INSERT OR REPLACE INTO scheduler_settings (key, value) VALUES ('app_log_path', ?)", (req.app_log_path or '',))
+        conn.execute("INSERT OR REPLACE INTO scheduler_settings (key, value) VALUES ('app_log_level', ?)", (req.app_log_level or 'INFO',))
+        conn.execute("INSERT OR REPLACE INTO scheduler_settings (key, value) VALUES ('app_log_max_size', ?)", (str(req.app_log_max_size) if req.app_log_max_size is not None else '10',))
         conn.commit()
+        # Dynamically apply the new log settings
+        configure_app_logging(conn)
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1136,8 +1166,17 @@ def execute_scheduler_job(job: dict, log_path: str):
             if src_library and src_table:
                 try:
                     src_cnt, src_ts = _get_database_count(src_tag, src_library, src_table, pipeline_id, src_agent_id)
+                    
+                    from zoneinfo import ZoneInfo
+                    try:
+                        local_tz = ZoneInfo("Asia/Bangkok")
+                    except:
+                        local_tz = None
+                    now_local = datetime.now(local_tz) if local_tz else datetime.now()
+                    src_check_time = now_local.strftime("%Y-%m-%d %H:%M:%S")
+                    
                     res["source_count"] = src_cnt
-                    res["source_last_ts"] = src_ts or "—"
+                    res["source_last_ts"] = src_check_time
                 except Exception as e:
                     res["error"] = f"{src_tag.upper()} Error: {str(e)[:150]}"
             else:
@@ -1146,8 +1185,17 @@ def execute_scheduler_job(job: dict, log_path: str):
             if tgt_schema and tgt_table:
                 try:
                     tgt_cnt, tgt_ts = _get_database_count(tgt_tag, tgt_schema, tgt_table, pipeline_id, tgt_agent_id)
+                    
+                    from zoneinfo import ZoneInfo
+                    try:
+                        local_tz = ZoneInfo("Asia/Bangkok")
+                    except:
+                        local_tz = None
+                    now_local = datetime.now(local_tz) if local_tz else datetime.now()
+                    tgt_check_time = now_local.strftime("%Y-%m-%d %H:%M:%S")
+                    
                     res["target_count"] = tgt_cnt
-                    res["target_last_ts"] = tgt_ts or "—"
+                    res["target_last_ts"] = tgt_check_time
                 except Exception as e:
                     res["error"] = f"{tgt_tag.upper()} Error: {str(e)[:150]}"
             else:
