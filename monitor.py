@@ -526,7 +526,7 @@ def get_entity_comparison(
             if not journal_summary.get('cache_hit'):
                 if verbose:
                     print(f"    → ⚠️  Cache miss, falling back to AS400 query...")
-                journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
+                journal_reader = AS400JournalReader(use_cache=use_cache)
                 journal_summary = journal_reader.get_summary(
                     source_table,
                     since=time_window_start,
@@ -534,7 +534,7 @@ def get_entity_comparison(
                 )
         else:
             # No time window or cache disabled - query AS400 directly
-            journal_reader = AS400JournalReader(qadmcli_path=qadmcli_path, use_cache=use_cache)
+            journal_reader = AS400JournalReader(use_cache=use_cache)
             journal_summary = journal_reader.get_summary(
                 source_table,
                 since=since_for_as400,

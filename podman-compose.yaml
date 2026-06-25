@@ -16,6 +16,7 @@ services:
     environment:
       - QADMCLI_PATH=qadmcli
       - PROMETHEUS_URL=http://localhost:9090
+      - QADMCLI_CONFIG=/app/qadmcli/config/connection.yaml
     volumes:
       # SQLite journal/CT cache (legacy monitor.py)
       - ./cache:/app/replica-mon/cache:Z

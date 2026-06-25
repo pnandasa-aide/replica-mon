@@ -680,6 +680,30 @@ This project follows standard Git workflow practices. See [`GIT_WORKFLOW.md`](..
   - AS400 journal and MSSQL CT integration
   - Time-based filtering
 
+## Proxy & Subpath Deployment
+
+When deployed behind a reverse proxy (e.g. Traefik) under a custom subpath prefix (like `/replica-mon`), the frontend dynamically detects the base path from `window.location.pathname` to ensure that API and WebSocket connections route correctly without hardcoding:
+
+```mermaid
+graph TD
+    subgraph Before Change
+        A[Browser URL: host/vercount/tool] --> B[API Call: host/api/...]
+        B --> C[Result: 404 Route Not Found]
+    end
+    subgraph After Change
+        D[Browser URL: host/vercount/tool] --> E[BASE_PATH: /vercount]
+        E --> F[API Call: host/vercount/api/...]
+        F --> G[Result: 200 OK]
+    end
+```
+
+The base path resolution evaluates:
+* `BASE_PATH`: Extracts any preceding path prefix, stripping routing keywords like `/tool` or trailing slashes.
+* `API_HOST`: Resolves to `${location.protocol}//${location.host}${BASE_PATH}`.
+* `WS_HOST`: Resolves to the correct secure (`wss:`) or unsecure (`ws:`) protocol prefix + `${location.host}${BASE_PATH}`.
+
+This makes the application completely subpath-aware out-of-the-box and fully backward-compatible with root level deployments (where `BASE_PATH` resolves to `""`).
+
 ## License
 
 Internal use only.

@@ -364,3 +364,91 @@ def _count_as400(library: str, table: str) -> tuple:
         logger.error(f"[verify] AS400 ✗ Exception: {e}")
         logger.error(f"[verify] AS400 Traceback: {traceback.format_exc()}")
         raise RuntimeError(str(e)) from e
+
+
+def configure_app_logging(conn=None):
+    """Dynamically configure application-wide logging based on settings in SQLite."""
+    try:
+        close_conn = False
+        if conn is None:
+            conn = sqlite3.connect(METRICS_DB_PATH)
+            conn.row_factory = sqlite3.Row
+            close_conn = True
+        
+        # Ensure the scheduler_settings table exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scheduler_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        conn.commit()
+
+        # Retrieve app log settings
+        app_log_path = None
+        app_log_level_str = "INFO"
+        app_log_max_size_mb = 10
+
+        rows = conn.execute("SELECT key, value FROM scheduler_settings WHERE key IN ('app_log_path', 'app_log_level', 'app_log_max_size')").fetchall()
+        for r in rows:
+            if r['key'] == 'app_log_path':
+                app_log_path = r['value']
+            elif r['key'] == 'app_log_level':
+                app_log_level_str = r['value'] or "INFO"
+            elif r['key'] == 'app_log_max_size':
+                try:
+                    app_log_max_size_mb = int(r['value']) if r['value'] else 10
+                except ValueError:
+                    app_log_max_size_mb = 10
+
+        if close_conn:
+            conn.close()
+
+        # Map log level string to logging constant
+        level_map = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL
+        }
+        log_level = level_map.get(app_log_level_str.upper(), logging.INFO)
+
+        # Re-configure Python root logger handlers
+        root_logger = logging.getLogger()
+        root_logger.setLevel(log_level)
+
+        # Remove existing handlers to avoid duplicates
+        for handler in list(root_logger.handlers):
+            root_logger.removeHandler(handler)
+
+        # Always add a StreamHandler for console output (sys.stdout)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(log_level)
+        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s - %(message)s')
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+        # If app_log_path is configured and valid, add a RotatingFileHandler
+        if app_log_path and app_log_path.strip():
+            log_dir = os.path.dirname(app_log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            from logging.handlers import RotatingFileHandler
+            file_handler = RotatingFileHandler(
+                app_log_path.strip(),
+                maxBytes=app_log_max_size_mb * 1024 * 1024,
+                backupCount=5,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(log_level)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+            
+            root_logger.info(f"Logging configured to write to file: {app_log_path} (level: {app_log_level_str}, max size: {app_log_max_size_mb}MB)")
+        else:
+            root_logger.info(f"Logging configured for console only (level: {app_log_level_str})")
+
+    except Exception as e:
+        print(f"[logging-config] Error dynamically configuring app logging: {e}")
+

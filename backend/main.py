@@ -36,6 +36,7 @@ try:
         METRICS_DB_PATH,
         REPORTS_DIR,
         CACHE_DIR,
+        configure_app_logging,
     )
     from backend.verify_wss import router as verify_wss_router
 except ModuleNotFoundError:
@@ -54,6 +55,7 @@ except ModuleNotFoundError:
         METRICS_DB_PATH,
         REPORTS_DIR,
         CACHE_DIR,
+        configure_app_logging,
     )
     from verify_wss import router as verify_wss_router
 
@@ -1143,6 +1145,7 @@ _background_engine: BackgroundComparisonEngine = None
 @app.on_event("startup")
 async def start_background_comparison():
     """Start the background comparison engine on app startup."""
+    configure_app_logging()
     global _background_engine
     interval = int(os.getenv("COMPARISON_INTERVAL", "120"))
     engine = BackgroundComparisonEngine(cache_dir=CACHE_DIR, interval=interval)

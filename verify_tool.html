@@ -1300,8 +1300,9 @@
 
 <script>
     // Constants for Host Resolution (supports both container service and local file testing)
-    const API_HOST = window.location.hostname ? `${window.location.protocol}//${window.location.host}` : 'http://localhost:8081';
-    const WS_HOST = window.location.hostname ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}` : 'ws://localhost:8081';
+    const BASE_PATH = window.location.hostname ? window.location.pathname.replace(/\/(tool)?\/*$/, '') : '';
+    const API_HOST = window.location.hostname ? `${window.location.protocol}//${window.location.host}${BASE_PATH}` : 'http://localhost:8081';
+    const WS_HOST = window.location.hostname ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${BASE_PATH}` : 'ws://localhost:8081';
 
     // Application State
     let allEntities = [];
