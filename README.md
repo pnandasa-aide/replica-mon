@@ -37,6 +37,12 @@ MSSQL_ADMIN_PASSWORD=your_mssql_admin_password
 GLUESYNC_HOST=https://localhost:1717
 GLUESYNC_ADMIN_USERNAME=admin
 GLUESYNC_ADMIN_PASSWORD=your_gluesync_password
+
+# External URL for emails & reports (defaults to http://{HOST_IP}:8081)
+# To access directly using host's LAN IP:
+APP_EXTERNAL_URL=http://{HOST_IP}:8081
+# Or when running behind a reverse proxy:
+# APP_EXTERNAL_URL=http://{HOST_IP}/my-proxy-path
 ```
 
 **⚠️ Security Note:** Never commit actual credentials to version control. Use environment variables or a `.env` file (added to `.gitignore`).

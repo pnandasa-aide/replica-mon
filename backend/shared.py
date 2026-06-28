@@ -12,9 +12,28 @@ from replica_msdk import GlueSyncClient, parse_protobuf
 
 logger = logging.getLogger("replica_mon.shared")
 
+import socket
+
+def get_host_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('10.254.254.254', 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
 GLUESYNC_URL = os.getenv("GLUESYNC_HOST", "https://localhost:1717")
 ADMIN_PASS = os.getenv("GLUESYNC_ADMIN_PASSWORD") or os.getenv("ADMIN_PASS")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+
+_raw_external_url = os.getenv("APP_EXTERNAL_URL")
+if _raw_external_url:
+    APP_EXTERNAL_URL = _raw_external_url.replace("{HOST_IP}", get_host_ip())
+else:
+    APP_EXTERNAL_URL = f"http://{get_host_ip()}:8081"
 
 # SQLite time-series store — use absolute path to avoid --app-dir __file__ resolution issues
 _base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
